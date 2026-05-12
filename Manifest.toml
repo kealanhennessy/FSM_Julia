@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "e75346eaf2c6603c082be39dec705fcbbca128ca"
+project_hash = "7aafafc256975064b6dcf1f505d514b20318a9f4"
 
 [[deps.ArchGDAL]]
 deps = ["CEnum", "ColorTypes", "Dates", "DiskArrays", "Extents", "GDAL", "GeoFormatTypes", "GeoInterface", "ImageCore", "Tables"]
@@ -152,15 +152,15 @@ git-tree-sha1 = "b309b36a9e02fe7be71270dd8c0fd873625332b4"
 uuid = "411431e0-e8b7-467b-b5e0-f676ba4f2910"
 version = "0.1.6"
 
-[[deps.FSM_Julia]]
-deps = ["ArchGDAL", "ArgParse", "DataStructures"]
-path = "."
-uuid = "cd7ef615-13db-4c83-81e2-7e67a96bbbf6"
-version = "0.1.0"
-
 [[deps.FileWatching]]
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
 version = "1.11.0"
+
+[[deps.FillSpillMerge]]
+deps = ["ArchGDAL", "ArgParse", "DataStructures", "Test"]
+path = "."
+uuid = "d8d09bb8-e6ef-41e1-ad34-644e49ba882c"
+version = "0.1.0"
 
 [[deps.FixedPointNumbers]]
 deps = ["Statistics"]
