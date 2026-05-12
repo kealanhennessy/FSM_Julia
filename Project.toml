@@ -1,0 +1,16 @@
+name = "FSM_Julia"
+uuid = "cd7ef615-13db-4c83-81e2-7e67a96bbbf6"
+version = "0.1.0"
+authors = ["Kealan John Hennessy <kjh2182@columbia.edu>"]
+
+[deps]
+ArchGDAL = "c9ce4bd3-c3d5-55b8-8973-c0e20141b8c3"
+ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+ArchGDAL = "0.10.11"
+ArgParse = "1.2.0"
+DataStructures = "0.19.4"
+Test = "1.11.0"
