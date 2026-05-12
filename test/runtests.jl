@@ -15,9 +15,18 @@ const CASES = [
 # Flip to true once `compute_julia_wtd` below is wired up to the port.
 const PORT_READY = false
 
+# Read a GeoTIFF, converting NoData cells to NaN. For input topos this gives
+# the ocean border as NaN; for fsm.exe reference outputs it's a no-op since
+# the binary writes 0 (not -9999) at ocean cells.
 function read_tif(path::AbstractString)
     ArchGDAL.read(path) do dataset
-        return ArchGDAL.read(ArchGDAL.getband(dataset, 1))
+        band = ArchGDAL.getband(dataset, 1)
+        arr = ArchGDAL.read(band)
+        nodata = ArchGDAL.getnodatavalue(band)
+        if nodata !== nothing && !isnan(nodata)
+            arr = replace(arr, nodata => NaN)
+        end
+        return arr
     end
 end
 
