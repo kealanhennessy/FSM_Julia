@@ -8,8 +8,11 @@ module FillSpillMerge
 # - NoData in input Float64 grids is represented as NaN.
 # - In wtd outputs, ocean cells are written as 0, not NaN (matches the C++
 #   fsm.exe convention and keeps the oracle comparison a plain elementwise diff).
-# - See constants.jl for D8 offsets, ocean/depression sentinels, and FP_ERROR.
+# - See constants.jl for D8 offsets and depression sentinels;
+#   fp_compare.jl for the floating-point tolerance and fp_eq/fp_le/fp_ge.
 
 include("constants.jl")
+include("fp_compare.jl")
+include("bucket_fill.jl")
 
 end
