@@ -6,7 +6,13 @@ import FillSpillMerge:
     fp_eq, fp_le, fp_ge,
     bucket_fill!, bucket_fill_from_edges!,
     D8X, D8Y, D8_INVERSE,
-    OCEAN, NO_DEP, NO_VALUE, NO_PARENT, NO_FLOW
+    OCEAN, NO_DEP, NO_VALUE, NO_PARENT, NO_FLOW,
+    DisjointDenseIntSet, find_set!, union_set!, merge_a_into_b!, same_set, make_set!,
+    LIFOMinPriorityQueue, pq_push!, pq_pop!,
+    Depression, Outlet, dh_label_t, flat_c_idx,
+    get_depression_hierarchy
+
+include("dephier_oracle.jl")
 
 const TEST_CASES_DIR = joinpath(@__DIR__, "test_cases")
 
@@ -196,7 +202,149 @@ end
         end
     end
 
-    @testset "Oracle: $(case.name)" for case in CASES
+    @testset "DisjointDenseIntSet" begin
+        @testset "preallocated" begin
+            s = DisjointDenseIntSet(5)
+            for i in 0:4
+                @test find_set!(s, i) == i
+                @test same_set(s, i, i)
+            end
+        end
+        @testset "union_set! by rank" begin
+            s = DisjointDenseIntSet(4)
+            union_set!(s, 0, 1)
+            @test same_set(s, 0, 1)
+            @test !same_set(s, 0, 2)
+            union_set!(s, 2, 3)
+            union_set!(s, 1, 3)
+            for i in 0:3, j in 0:3
+                @test same_set(s, i, j)
+            end
+        end
+        @testset "merge_a_into_b! preserves parenthood" begin
+            s = DisjointDenseIntSet(3)
+            merge_a_into_b!(s, 0, 2)
+            merge_a_into_b!(s, 1, 2)
+            @test find_set!(s, 0) == 2
+            @test find_set!(s, 1) == 2
+            @test find_set!(s, 2) == 2
+        end
+        @testset "dynamic growth via make_set!" begin
+            s = DisjointDenseIntSet()
+            make_set!(s, 7)
+            @test find_set!(s, 7) == 7
+            @test_throws ArgumentError find_set!(s, 8)
+        end
+        @testset "merge_a_into_b! grows storage" begin
+            s = DisjointDenseIntSet(2)
+            merge_a_into_b!(s, 0, 5)
+            @test find_set!(s, 0) == 5
+            @test find_set!(s, 5) == 5
+        end
+    end
+
+    @testset "LIFOMinPriorityQueue" begin
+        @testset "min-key ordering" begin
+            q = LIFOMinPriorityQueue{Int, Float64}()
+            pq_push!(q, 3.0, 30)
+            pq_push!(q, 1.0, 10)
+            pq_push!(q, 2.0, 20)
+            @test pq_pop!(q) == 10
+            @test pq_pop!(q) == 20
+            @test pq_pop!(q) == 30
+            @test isempty(q)
+        end
+        @testset "LIFO on equal keys" begin
+            # The dephier algorithm relies on this: when several cells of
+            # the same elevation are queued, the most recently pushed is
+            # popped first, so flat-area wavefronts stay coherent.
+            q = LIFOMinPriorityQueue{Int, Float64}()
+            for v in 1:5
+                pq_push!(q, 1.0, v)
+            end
+            @test [pq_pop!(q) for _ in 1:5] == [5, 4, 3, 2, 1]
+        end
+        @testset "interleaved keys" begin
+            q = LIFOMinPriorityQueue{Int, Float64}()
+            pq_push!(q, 1.0, 1)
+            pq_push!(q, 2.0, 2)
+            pq_push!(q, 1.0, 3)
+            pq_push!(q, 2.0, 4)
+            @test pq_pop!(q) == 3   # most recent at key=1
+            @test pq_pop!(q) == 1
+            @test pq_pop!(q) == 4   # most recent at key=2
+            @test pq_pop!(q) == 2
+        end
+    end
+
+    @testset "Depression/Outlet" begin
+        @testset "Depression defaults" begin
+            d = Depression{Float64}()
+            @test d.pit_cell == NO_VALUE
+            @test d.out_cell == NO_VALUE
+            @test d.parent   == NO_PARENT
+            @test d.odep     == NO_VALUE
+            @test d.geolink  == NO_VALUE
+            @test d.pit_elev == Inf
+            @test d.out_elev == Inf
+            @test d.lchild   == NO_VALUE
+            @test d.rchild   == NO_VALUE
+            @test d.ocean_parent == false
+            @test d.ocean_linked == dh_label_t[]
+            @test d.dep_label == 0
+            @test d.cell_count == 0
+            @test d.dep_vol == 0.0
+            @test d.water_vol == 0.0
+            @test d.total_elevation == 0.0
+        end
+        @testset "Outlet swaps to depa<=depb" begin
+            o1 = Outlet{Float64}(7, 3, 100, 5.0)
+            @test o1.depa == 3
+            @test o1.depb == 7
+            o2 = Outlet{Float64}(3, 7, 100, 5.0)
+            @test o2.depa == 3
+            @test o2.depb == 7
+        end
+    end
+
+    @testset "Phase 2 oracle: $(case.name)" for case in CASES
+        case_dir = joinpath(TEST_CASES_DIR, case.name)
+        oracle_path = joinpath(case_dir, "expected-dh.txt")
+        @test isfile(oracle_path)
+
+        topo = read_tif(joinpath(case_dir, "input.tif"))
+        oracle = read_dh_dump(oracle_path)
+        @test size(topo) == (oracle.W, oracle.H)
+
+        label, flowdirs, topo_clean = prepare_label_and_flowdirs(topo, case.ocean_level)
+        deps = get_depression_hierarchy(topo_clean, label, flowdirs)
+
+        @testset "label grid" begin
+            ok, n, first = diff_grid("label", label, oracle.label)
+            ok || @info "first label mismatch" first n
+            @test ok
+        end
+        @testset "flowdirs grid" begin
+            ok, n, first = diff_grid("flowdirs", flowdirs, oracle.flowdirs)
+            ok || @info "first flowdirs mismatch" first n
+            @test ok
+        end
+        @testset "depression count" begin
+            @test length(deps) == length(oracle.deps)
+        end
+        @testset "per-depression fields" begin
+            n_check = min(length(deps), length(oracle.deps))
+            for i in 1:n_check
+                mismatches = diff_depression(deps[i], oracle.deps[i])
+                if !isempty(mismatches)
+                    @info "depression mismatch" i mismatches
+                end
+                @test isempty(mismatches)
+            end
+        end
+    end
+
+    @testset "Oracle wtd: $(case.name)" for case in CASES
         case_dir = joinpath(TEST_CASES_DIR, case.name)
         @test isfile(joinpath(case_dir, "input.tif"))
         @test isfile(joinpath(case_dir, "expected-wtd.tif"))
