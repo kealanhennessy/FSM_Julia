@@ -5,10 +5,16 @@ implementation-defined, which prevents bit-exact comparison against the
 Julia port (the leaf depressions match, but parent/child assignments
 and per-meta-dep aggregate fields can differ).
 
-Apply against `submodules/dephier/include/dephier/dephier.hpp` in a
-local checkout of Barnes2020-FillSpillMerge. Do NOT push upstream.
+**Status:** PRE-APPLIED in
+`vendor/Barnes2020-FillSpillMerge/submodules/dephier/include/dephier/dephier.hpp`.
+This file is here for two reasons only: (1) audit — to see exactly what
+diverges from upstream, and (2) refresh — to re-derive the vendored
+state from a clean upstream clone. The Julia tests do not need this
+patch to be applied at build time. Do NOT push upstream.
 
-  cd <FSM_CPP>/submodules/dephier
+Refresh recipe:
+
+  cd <fresh-upstream-clone>/submodules/dephier
   git apply <FSM_Julia>/tools/patches/dephier-deterministic-outlets.patch
 
 diff --git a/include/dephier/dephier.hpp b/include/dephier/dephier.hpp

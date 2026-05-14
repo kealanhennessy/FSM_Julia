@@ -19,5 +19,6 @@ include("disjoint_set.jl")
 include("priority_queue.jl")
 include("dephier.jl")
 include("fill_spill_merge.jl")
+include("priority_flood.jl")
 
 end

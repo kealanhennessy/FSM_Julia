@@ -1,2 +1,3 @@
 Manifest.toml
 tools/dh_dump.exe
+tools/gen_random_terrains.exe

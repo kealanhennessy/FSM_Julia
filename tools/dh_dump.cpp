@@ -4,16 +4,16 @@
 // to a single text file the Julia tests can parse.
 //
 // Lives here (FSM_Julia/tools/) because it only exists to feed the
-// Julia tests. It builds against the upstream C++ repo's headers; see
-// build.sh next to this file for the compile command.
+// Julia tests. It builds against the vendored C++ snapshot at
+// ../vendor/Barnes2020-FillSpillMerge/ — see build.sh next to this file
+// for the compile command, and the vendor README for scope.
 //
-// IMPORTANT: For the dumped depression vector to match Julia's
-// get_depression_hierarchy bit-for-bit, the upstream
-// `submodules/dephier/include/dephier/dephier.hpp` must have the
-// deterministic outlet sort comparator (tie-break on
-// depa, depb, out_cell). See
+// The vendored dephier.hpp has the deterministic outlet sort comparator
+// (tie-break on depa, depb, out_cell) pre-applied, so the dumped
+// depression vector matches Julia's get_depression_hierarchy
+// bit-for-bit out of the box. See
 // FSM_Julia/tools/patches/dephier-deterministic-outlets.patch for the
-// patch, and the README note in this folder for context.
+// underlying diff vs. upstream.
 //
 // Usage:
 //   dh_dump.exe <input.tif> <ocean_level> <output.txt>

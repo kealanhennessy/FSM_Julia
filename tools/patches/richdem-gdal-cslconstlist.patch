@@ -2,11 +2,16 @@ Fix richdem's Array2D.hpp to compile against modern GDAL (>= 3.7),
 where GDALDataset::GetMetadata returns CSLConstList (const char* const*)
 rather than char**.
 
-Apply against
-`submodules/dephier/submodules/richdem/include/richdem/common/Array2D.hpp`
-in a local checkout of Barnes2020-FillSpillMerge. Do NOT push upstream.
+**Status:** PRE-APPLIED in
+`vendor/Barnes2020-FillSpillMerge/submodules/dephier/submodules/richdem/include/richdem/common/Array2D.hpp`.
+This file is here for audit (see exactly what diverges from upstream)
+and refresh (re-derive the vendored state from a clean upstream clone).
+The Julia tests do not need this patch to be applied at build time. Do
+NOT push upstream.
 
-  cd <FSM_CPP>/submodules/dephier/submodules/richdem
+Refresh recipe:
+
+  cd <fresh-upstream-clone>/submodules/dephier/submodules/richdem
   git apply <FSM_Julia>/tools/patches/richdem-gdal-cslconstlist.patch
 
 diff --git a/include/richdem/common/Array2D.hpp b/include/richdem/common/Array2D.hpp

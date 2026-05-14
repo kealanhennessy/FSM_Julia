@@ -429,4 +429,11 @@ end
             @test_skip compute_julia_wtd(nothing, case.ocean_level, case.swl)
         end
     end
+
+    # Phase 4 — direct ports of the C++ unit tests (fsm_tests.cpp) plus
+    # randomized property tests over a fixed batch of perlin terrains,
+    # plus edge cases not covered upstream.
+    include("fsm_unit_tests.jl")
+    include("fsm_random_tests.jl")
+    include("fsm_edge_tests.jl")
 end
