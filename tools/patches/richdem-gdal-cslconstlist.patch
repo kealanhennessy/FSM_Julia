@@ -1,0 +1,24 @@
+Fix richdem's Array2D.hpp to compile against modern GDAL (>= 3.7),
+where GDALDataset::GetMetadata returns CSLConstList (const char* const*)
+rather than char**.
+
+Apply against
+`submodules/dephier/submodules/richdem/include/richdem/common/Array2D.hpp`
+in a local checkout of Barnes2020-FillSpillMerge. Do NOT push upstream.
+
+  cd <FSM_CPP>/submodules/dephier/submodules/richdem
+  git apply <FSM_Julia>/tools/patches/richdem-gdal-cslconstlist.patch
+
+diff --git a/include/richdem/common/Array2D.hpp b/include/richdem/common/Array2D.hpp
+index b356068..a41d582 100644
+--- a/include/richdem/common/Array2D.hpp
++++ b/include/richdem/common/Array2D.hpp
+@@ -39,7 +39,7 @@ namespace richdem {
+
+ template<typename> class Array3D;
+
+-inline std::map<std::string, std::string> ProcessMetadata(char **metadata){
++inline std::map<std::string, std::string> ProcessMetadata(CSLConstList metadata){
+   std::map<std::string, std::string> ret;
+   if(metadata==NULL)
+     return ret;

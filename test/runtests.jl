@@ -10,7 +10,8 @@ import FillSpillMerge:
     DisjointDenseIntSet, find_set!, union_set!, merge_a_into_b!, same_set, make_set!,
     LIFOMinPriorityQueue, pq_push!, pq_pop!,
     Depression, Outlet, dh_label_t, flat_c_idx,
-    get_depression_hierarchy
+    get_depression_hierarchy,
+    fill_spill_merge!, depression_volume
 
 include("dephier_oracle.jl")
 
@@ -25,7 +26,7 @@ const CASES = [
 ]
 
 # Flip to true once `compute_julia_wtd` below is wired up to the port.
-const PORT_READY = false
+const PORT_READY = true
 
 # Read a GeoTIFF, converting NoData cells to NaN. For input topos this gives
 # the ocean border as NaN; for fsm.exe reference outputs it's a no-op since
@@ -42,10 +43,21 @@ function read_tif(path::AbstractString)
     end
 end
 
-# Single seam between this test harness and the port. Replace the body with
-# a call into the package's public FSM entry point once Phase 3 lands.
+# Single seam between this test harness and the port. Mirrors the C++
+# `main.cpp` setup: label oceans, init wtd to swl on land / 0 on ocean,
+# run dephier, then run FSM.
 function compute_julia_wtd(topo, ocean_level, swl)
-    error("Julia port not implemented yet")
+    label, flowdirs, topo_clean = prepare_label_and_flowdirs(topo, ocean_level)
+    deps = get_depression_hierarchy(topo_clean, label, flowdirs)
+    W, H = size(topo)
+    wtd = fill(Float64(swl), W, H)
+    @inbounds for i in eachindex(label)
+        if label[i] == OCEAN
+            wtd[i] = 0.0
+        end
+    end
+    fill_spill_merge!(topo_clean, label, flowdirs, deps, wtd)
+    return wtd
 end
 
 @testset "FillSpillMerge" begin
@@ -304,6 +316,64 @@ end
             o2 = Outlet{Float64}(3, 7, 100, 5.0)
             @test o2.depa == 3
             @test o2.depb == 7
+        end
+    end
+
+    @testset "FSM helpers" begin
+        @testset "depression_volume" begin
+            # Simple sill: 3 cells at elev 1.0 dammed at elev 2.0
+            # -> 3*2 - (1+1+1) = 3.
+            @test depression_volume(2.0, 3, 3.0) == 3.0
+            # Empty depression has zero volume regardless of sill.
+            @test depression_volume(10.0, 0, 0.0) == 0.0
+            # A sill at the floor of a single cell holds nothing.
+            @test depression_volume(1.0, 1, 1.0) == 0.0
+            # Negative-volume case (current_volume goes negative when we
+            # climb past a saddle): single cell, sill below floor.
+            @test depression_volume(0.0, 1, 1.0) == -1.0
+        end
+
+        @testset "fill_spill_merge! preserves ocean cells at 0" begin
+            # Trivial 3x3 grid: centre is a pit at elev 1, surrounded
+            # by ocean at elev 0. With swl=1, the centre receives water
+            # but cannot overflow (parent is ocean-linked) so it just
+            # fills to the sill (elev 0... actually it cannot fill at
+            # all since dep_vol = 0). What we care about here is the
+            # invariant: ocean cells stay at wtd=0.
+            topo = [0.0 0.0 0.0;
+                    0.0 1.0 0.0;
+                    0.0 0.0 0.0]
+            label, flowdirs, topo_clean = prepare_label_and_flowdirs(topo, 0.0)
+            deps = get_depression_hierarchy(topo_clean, label, flowdirs)
+            W, H = size(topo)
+            wtd = fill(1.0, W, H)
+            for i in eachindex(label)
+                if label[i] == OCEAN
+                    wtd[i] = 0.0
+                end
+            end
+            fill_spill_merge!(topo_clean, label, flowdirs, deps, wtd)
+            for i in eachindex(label)
+                if label[i] == OCEAN
+                    @test wtd[i] == 0.0
+                end
+            end
+        end
+
+        @testset "fill_spill_merge! is idempotent under swl=0" begin
+            # With zero surface water everywhere, FSM should leave wtd
+            # unchanged at zero across the board.
+            topo = [0.0 0.0 0.0;
+                    0.0 1.0 0.0;
+                    0.0 2.0 0.0;
+                    0.0 1.0 0.0;
+                    0.0 0.0 0.0]
+            label, flowdirs, topo_clean = prepare_label_and_flowdirs(topo, 0.0)
+            deps = get_depression_hierarchy(topo_clean, label, flowdirs)
+            W, H = size(topo)
+            wtd = zeros(W, H)
+            fill_spill_merge!(topo_clean, label, flowdirs, deps, wtd)
+            @test all(==(0.0), wtd)
         end
     end
 
