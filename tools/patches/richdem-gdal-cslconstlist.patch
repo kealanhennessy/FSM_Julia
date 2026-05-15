@@ -3,7 +3,8 @@ GDALDataset::GetMetadata returns CSLConstList (const char* const*)
 rather than char**. Verified against GDAL 3.13.0 on the dev machine
 (gdal_majorobject.h:79). The exact GDAL minor version where the return
 type narrowed is not pinned; the justification rests on the GDAL
-actually in use. See README.md "C++ patches" for the full rationale.
+actually in use. See the repository root README.md, section
+"C++ patches", for the full rationale.
 
 **Status:** PRE-APPLIED in
 `vendor/Barnes2020-FillSpillMerge/submodules/dephier/submodules/richdem/include/richdem/common/Array2D.hpp`.

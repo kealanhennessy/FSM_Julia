@@ -12,7 +12,8 @@
 # under ../vendor/Barnes2020-FillSpillMerge/. The two upstream patches
 # (deterministic dephier tie-break + GDAL CSLConstList fix) are
 # **pre-applied** in the vendored copy — no patch step needed before
-# building. See ../vendor/Barnes2020-FillSpillMerge/README.md.
+# building. See the repository root README.md ("Testing" and "The
+# vendored C++ snapshot" sections) for full details.
 #
 # Usage:
 #   ./build.sh                              # uses ../vendor/Barnes2020-FillSpillMerge

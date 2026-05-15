@@ -6,7 +6,8 @@
 // Lives here (FSM_Julia/tools/) because it only exists to feed the
 // Julia tests. It builds against the vendored C++ snapshot at
 // ../vendor/Barnes2020-FillSpillMerge/ — see build.sh next to this file
-// for the compile command, and the vendor README for scope.
+// for the compile command, and the repository root README.md ("The
+// vendored C++ snapshot") for scope.
 //
 // The vendored dephier.hpp has the deterministic outlet sort comparator
 // (tie-break on depa, depb, out_cell) pre-applied, so the dumped

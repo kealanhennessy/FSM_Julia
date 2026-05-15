@@ -7,8 +7,9 @@ the reference `fsm.exe` bit-for-bit on the committed test cases.
 
 This branch is **self-contained**: a minimal copy of the upstream C++
 sources is vendored at `vendor/Barnes2020-FillSpillMerge/`, so cloning
-the repo gives you everything needed to run the full test suite — no
-external repositories to fetch, no patches to apply.
+the repo gives you everything needed to run the full test suite *and* to
+regenerate the reference data — no external repositories to fetch, no
+patches to apply.
 
 ## Quick start
 
@@ -19,102 +20,427 @@ julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
 Expected: `Pkg.test()` reports `1665 / 1665 pass` in roughly 6 seconds.
+Nothing besides Julia is needed for this — see Testing → Option A.
 
-That's the entire test flow. Nothing else needs to be built — every
-oracle file the tests compare against lives in
-`test/test_cases/`. The vendored C++ and the helpers in `tools/` are
-only required if you want to *regenerate* those oracles.
+---
 
-## Step-by-step
+# Testing
 
-### 1. Prerequisites
+There are two ways to exercise this repository, and they are completely
+independent of each other:
 
-- **Julia** ≥ 1.11. The dev machine runs 1.12.6.
-- A working network connection for `Pkg.instantiate()` to fetch the
-  Julia dependencies (`ArchGDAL`, `ArgParse`, `DataStructures`, `Test`).
-  Total install footprint: ~140 packages, a few hundred MB on first
-  run. Subsequent runs use the local Julia depot cache.
+- **Option A — Run the test suite (`Pkg.test()`).** The normal path.
+  Pure Julia. Compares the port against reference data files that are
+  already committed to the repo. **No C++ compiler, no GDAL, nothing
+  but Julia.** This is what you almost always want.
 
-You do **not** need a C++ toolchain, GDAL, or anything else to run the
-tests. All test data is committed under `test/test_cases/` (~3.5 MB
-total: 5 hand-crafted oracle cases for the depression-hierarchy and
-WTD outputs, plus 70 perlin-generated terrains for property tests).
+- **Option B — Regenerate the oracle data.** Only needed if you have
+  changed the algorithm or a test fixture and need to rebuild the
+  reference data the suite compares against. This is the only path that
+  compiles C++.
 
-### 2. Clone and enter the repo
+The relationship between them: Option B *produces* the frozen reference
+files (`expected-dh.txt`, the random terrain `.tif`s, and historically
+`expected-wtd.tif`); Option A *consumes* them. The C++ in `vendor/` and
+`tools/` exists solely to support Option B. It is never touched by
+Option A.
+
+## Option A — Run the test suite
+
+### A.1 Prerequisites
+
+- **Julia ≥ 1.11** (the reference machine runs 1.12.6).
+- Network access on first run so `Pkg.instantiate()` can fetch the
+  Julia dependencies (`ArchGDAL`, `ArgParse`, `DataStructures`, `Test`)
+  — about 140 transitive packages, a few hundred MB, cached in the
+  Julia depot afterwards.
+
+You do **not** need a C++ toolchain, GDAL, CMake, or anything else. All
+reference data is committed under `test/test_cases/` (~3.5 MB: five
+hand-crafted oracle cases plus seventy generated terrains).
+
+### A.2 Steps
 
 ```sh
 git clone <repo-url> FSM_Julia
 cd FSM_Julia
-```
 
-### 3. Instantiate the Julia environment
-
-```sh
+# Resolve Project.toml/Manifest.toml to the exact pinned dependency
+# versions (one-time; a minute or two on first run):
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
-```
 
-This reads `Project.toml` / `Manifest.toml` and downloads the exact
-dependency versions used by the dev machine. Takes a minute or two on
-first run.
-
-### 4. Run the full test suite
-
-```sh
+# Run everything:
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-Expected output (final two lines):
+Expected final output:
 
 ```
 Test Summary:  | Pass  Total  Time
 FillSpillMerge | 1665   1665  ~6s
 ```
 
-The breakdown:
+### A.3 What it actually does
+
+`Pkg.test()` runs `test/runtests.jl`, which loads the Julia port and,
+for each test group below, either checks an invariant directly or reads
+a committed reference file and diffs the port's output against it. The
+reference files are static inputs to the test run; nothing regenerates
+them and no C++ is involved.
+
+### A.4 Test groups
 
 | Group | Tests | What it checks |
 |---|---|---|
-| Phase 1 unit tests | ~30 | constants, fp-compare helpers, BucketFillFromEdges |
-| Phase 2 helpers | ~30 | DisjointDenseIntSet, LIFOMinPriorityQueue, Depression / Outlet |
-| Phase 2 dephier oracles | ~250 | bit-exact match against `expected-dh.txt` (5 cases) |
-| Phase 3 WTD oracles | 15 | bit-exact match against `expected-wtd.tif` (5 cases, tolerance 1e-9 / 1e-6) |
-| Phase 4 unit ports | ~32 | direct ports of every `TEST_CASE` in `unittests/fsm_tests.cpp` |
-| Phase 4 random property tests | ~1130 | 5 properties iterated over 70 perlin terrains, including a heavy-flooding-vs-Priority-Flood cross-check |
-| Phase 4 edge cases | ~70 | 1×1 grids, all-ocean, monotonic slope, deep pit, Float32 elevations |
+| **Core utilities** | ~30 | D8 offset/constant consistency, the `fp_eq`/`fp_le`/`fp_ge` floating-point comparison helpers, and `BucketFillFromEdges` (ocean flood-fill). |
+| **Data structures** | ~30 | `DisjointDenseIntSet` (union/find with the merge-into-parent variant), the LIFO-min priority queue, and `Depression`/`Outlet` struct defaults. |
+| **Depression-hierarchy oracles** | ~250 | `get_depression_hierarchy` run on each of the 5 hand-crafted cases, compared **bit-exact** against `expected-dh.txt` (label grid, flow directions, and every field of every `Depression`). |
+| **Water-table-depth oracles** | 15 | Full FSM run on each of the 5 cases, compared against `expected-wtd.tif` produced by the reference C++ `fsm.exe`. Tolerance 1e-9 for cases 1–4 (exact rationals), 1e-6 for the 100×100 case. |
+| **Ported C++ unit tests** | ~32 | Direct 1:1 ports of every `TEST_CASE` in the upstream `unittests/fsm_tests.cpp` (DepressionVolume, DetermineWaterLevel, MoveWaterIntoPits, BackfillDepression, FillDepressions and its sub-cases, the two "PQ Issue" regressions). Deterministic; no random input. |
+| **Randomized property tests** | ~1130 | Five properties iterated over the 70 generated terrains: surface water is conserved; FSM is idempotent under re-application; incremental vs. bulk water input agree; `MoveWaterIntoPits` is consistent on re-seeding; and a heavy-flood run agrees with an independent Priority-Flood (Zhou 2016) fill. |
+| **Edge cases** | ~70 | 1×1 land (throws — needs ocean), all-ocean (throws), lone interior cell absorbed into ocean, monotonic slope (no depressions), a pit filled exactly to its brim, and a full run on `Float32` elevations. |
 
-### 5. (Optional) Regenerate oracle data
+(The group sizes are approximate because several groups loop over the
+70 terrains or per-depression fields, multiplying the assertion count.)
 
-Only needed if you are refreshing the test fixtures (e.g. after a
-behavioural change to the algorithm). Requires the vendored C++
-snapshot to be rebuilt locally, which means you need a C++17 toolchain
-and GDAL. See `tools/README.md` for full instructions; the short
-version on a machine like the dev machine:
+## Option B — Regenerate the oracle data
+
+You only need this if you changed the algorithm or a test fixture and
+must rebuild the reference data Option A compares against. It is the
+only path that compiles C++.
+
+### B.1 What the reference data is, and what regenerates it
+
+| Reference file(s) | Produced by | Regenerable from this repo? |
+|---|---|---|
+| `test/test_cases/case_*/expected-dh.txt` | `tools/dh_dump.exe` | **Yes** — Option B below. |
+| `test/test_cases/random/*.tif` (70 files) | `tools/gen_random_terrains.exe` | **Yes** — Option B below. |
+| `test/test_cases/case_*/expected-wtd.tif` | upstream's full `fsm.exe` | **No** — see B.5. |
+
+### B.2 Prerequisites
+
+- A C++17 compiler and GDAL development headers/libraries.
+- On the reference machine: `brew install llvm gdal`. The build script
+  defaults to the Homebrew LLVM clang and an x86_64 target (see
+  Reference system, below); override `CXX=` / `ARCH=` if your toolchain
+  differs.
+
+No upstream checkout or patching is required: the vendored C++ snapshot
+under `vendor/Barnes2020-FillSpillMerge/` already has the two required
+patches pre-applied (see "C++ patches", below).
+
+### B.3 Build the helper programs
 
 ```sh
-brew install llvm gdal       # if you don't already have them
-tools/build.sh               # builds tools/dh_dump.exe + tools/gen_random_terrains.exe
+tools/build.sh
+```
 
-# Regenerate the 5 dephier oracles
+This compiles two small standalone programs against the vendored C++
+headers (it does **not** use the upstream's CMake, and never modifies
+anything under `vendor/`):
+
+- **`tools/dh_dump.exe`** (from `tools/dh_dump.cpp`) — runs the C++
+  ocean-labeling + `GetDepressionHierarchy` on a GeoTIFF and writes the
+  label grid, flow-directions grid, and the full `Depression` vector to
+  the plain-text format the depression-hierarchy oracle tests parse.
+- **`tools/gen_random_terrains.exe`** (from
+  `tools/gen_random_terrains.cpp`) — uses richdem's `perlin` to emit a
+  deterministic batch of 70 small/large × integer/float terrains.
+  Bumping `MASTER_SEED` in the source yields a fresh batch.
+
+`tools/build.sh` resolves the C++ root from the `FSM_CPP` environment
+variable, defaulting to `vendor/Barnes2020-FillSpillMerge/`. Point it at
+a full upstream clone instead if you need to rebuild `fsm.exe` (the
+vendored subset cannot — see B.5):
+
+```sh
+FSM_CPP=/path/to/full/Barnes2020-FillSpillMerge tools/build.sh
+```
+
+### B.4 Regenerate the regenerable oracles
+
+```sh
+# Depression-hierarchy oracles (one expected-dh.txt per case):
 for d in test/test_cases/case_*; do
   tools/dh_dump.exe "$d/input.tif" 0.0 "$d/expected-dh.txt"
 done
 
-# Regenerate the 70-terrain random batch
+# The 70-terrain random batch (overwrites test/test_cases/random/*.tif):
 tools/gen_random_terrains.exe test/test_cases/random
 ```
 
-Regenerating `expected-wtd.tif` is **not** supported against the
-minimal vendored copy — that file is produced by upstream's full
-`fsm.exe`, which the vendor doesn't include. To refresh those, clone
-the full upstream Barnes2020-FillSpillMerge, apply the two patches in
-`tools/patches/`, and build via CMake.
+Then re-run Option A to confirm the port still matches the refreshed
+data. (Note: regenerating the random terrains rewrites the `.tif`
+files; their *elevation data* is deterministic from `MASTER_SEED`, but
+GeoTIFF headers embed a timestamp, so the files will show as changed in
+git even when the numbers are identical.)
 
-## Reference system
+### B.5 Why `expected-wtd.tif` is different
 
-These specs are the only configuration the port has been exercised on
-end-to-end. Anything reasonably close should work, but the exact
-numbers are recorded here so reproducibility issues can be triaged
-against a known-good baseline.
+The water-table-depth oracles were produced by the upstream's full
+`fsm.exe`, which is built from `src/main.cpp` plus the rest of the
+upstream source tree. The vendored snapshot deliberately includes only
+the headers and perlin source the two helper tools need (~2.6 MB), not
+`src/main.cpp` or the upstream CMake project, so it **cannot** rebuild
+`fsm.exe`. The committed `expected-wtd.tif` files remain the frozen
+oracle. To refresh them you must clone the full upstream
+Barnes2020-FillSpillMerge, apply the two patches in `tools/patches/`,
+build via its CMake, and run `fsm.exe` per case with that case's
+`ocean_level` / `--swl` (see the Test cases table).
+
+---
+
+# Test cases
+
+The five hand-crafted cases under `test/test_cases/case_*/` each
+contain:
+
+- `input.asc` — Arc/Info ASCII grid of the DEM (human-readable source).
+- `input.tif` — same DEM as a Float64 GeoTIFF (the format FSM consumes).
+- `expected-wtd.tif` — water-table depth from the reference C++ binary.
+- `expected-hydrologic-surface-height.tif` — `wtd + topo`.
+- `expected-dh.txt` — the dumped depression hierarchy (regenerable; see
+  Option B).
+- `run.sh` — reproduces the case from `input.asc` via the upstream
+  binary. (Case 5 also has `generate.py` to re-derive its input.)
+
+### Algorithm contract exercised by the cases
+
+The reference binary is invoked as
+`fsm.exe <topo.tif> <out_prefix> <ocean_level> --swl <X>`:
+
+- **`ocean_level`** — FSM bucket-fills inward from the grid edges,
+  marking edge-connected cells with elevation ≤ `ocean_level` as OCEAN.
+  Any NoData cell also becomes OCEAN regardless of position. FSM errors
+  if there are no OCEAN cells, so every case has at least one NoData
+  cell.
+- **`--swl X`** — constant surface-water level: every non-ocean cell
+  starts with X units of standing water.
+- **Output** — `<prefix>-wtd.tif` (water-table depth) and
+  `<prefix>-hydrologic-surface-height.tif` (`wtd + topo`). Ocean cells
+  have `wtd = 0`.
+
+### The cases
+
+| # | Size | `ocean_level` | `--swl` | Tol | Purpose |
+|---|---|---|---|---|---|
+| 1 | 5×5 | −100 | 1.0 | 1e-9 | Trivial trough; one NoData ocean cell. Sanity check + corner-ocean drainage. |
+| 2 | 10×10 | 0 | 1.0 | 1e-9 | Single bowl-shaped depression, NoData border ocean. No overflow. |
+| 3 | 10×10 | 0 | 1.5 | 1e-9 | Two adjacent depressions sharing a sill. Forces overflow + merge. |
+| 4 | 10×10 | 0 | 1.0 | 1e-9 | Three-level hierarchy: two pits in a bowl in a plateau. |
+| 5 | 100×100 | 0 | 0.5 | 1e-6 | Synthetic 1/f-noise terrain; many depressions; full-scale exercise. |
+
+The 70 files under `test/test_cases/random/` are perlin terrains
+(30 small + 5 large, each in integer-truncated and float variants) used
+only by the randomized property tests. They carry no committed
+"expected" output — the property tests assert invariants, not specific
+values.
+
+---
+
+# Testing-support code
+
+None of the code below is part of the Fill-Spill-Merge algorithm. It
+was written purely to make the port testable: parsing reference dumps,
+bridging C++ and Julia indexing conventions, loading fixtures, and
+providing an independent algorithm to cross-check against. It lives in
+`test/` (Julia harness helpers), `src/priority_flood.jl` (an
+independent reference algorithm), and `tools/` (C++ data-dump
+programs). Each item below gives the signature, what it does, and *why*
+it had to exist.
+
+## Harness helpers in `test/runtests.jl`
+
+These are defined in the test entry point itself because they are the
+glue between the suite and the port.
+
+- **`read_tif(path) -> Matrix`** — Reads band 1 of a GeoTIFF via
+  ArchGDAL and, if the band declares a non-NaN NoData value, replaces
+  those cells with `NaN`. *Why:* input topographies encode the ocean
+  border as a NoData value; the algorithm and the rest of the harness
+  expect ocean as `NaN`. For the `fsm.exe` reference outputs this is a
+  deliberate no-op — the C++ binary writes a numeric `0` at ocean
+  cells (NoData is some other sentinel), so the oracle is read back
+  faithfully rather than having its zeros turned into `NaN`.
+
+- **`compute_julia_wtd(topo, ocean_level, swl) -> Matrix`** — The
+  single integration seam between the harness and the port. It mirrors
+  the setup in the upstream `src/main.cpp`: build the label/flowdirs
+  grids and ocean labelling via `prepare_label_and_flowdirs`, run
+  `get_depression_hierarchy`, initialise `wtd` to `swl` on land and `0`
+  on ocean cells, then run `fill_spill_merge!`. Returns the resulting
+  water-table-depth grid. *Why:* the water-table-depth oracle tests
+  need exactly the same pre-processing the C++ `main.cpp` does around
+  the algorithm, isolated in one place so the test body is just
+  "compute vs. expected".
+
+- **`CASES`, `TEST_CASES_DIR`, `PORT_READY`** — `CASES` is the table of
+  the five hand-crafted cases and their `ocean_level` / `swl` /
+  tolerance (the parameters each case's reference output was generated
+  with). `TEST_CASES_DIR` is the fixtures path. `PORT_READY` is a flag
+  that gates the water-table-depth oracle tests: when `true` (its
+  current, permanent value) those tests run for real; when `false` they
+  become `@test_skip`. It was the switch used while the port was being
+  built and is left in place as an explicit, greppable marker of that
+  gate.
+
+## Oracle parsing + comparison in `test/dephier_oracle.jl`
+
+This file exists entirely to consume the depression-hierarchy dump
+produced by `tools/dh_dump.exe` and compare it to the Julia port.
+
+- **`read_dh_dump(path) -> OracleDH`** — Parses the plain-text dump
+  format (`WIDTH` / `HEIGHT` / `NDEP` header, then the `LABEL` grid,
+  the `FLOWDIRS` grid, then one line per `Depression`). Returns an
+  `OracleDH`. *Why:* the C++ side can't hand Julia a struct, so the
+  hierarchy is serialised to text by `dh_dump.cpp` and reconstructed
+  here.
+
+- **`OracleDH`** — Immutable struct
+  `{W::Int, H::Int, label::Matrix{dh_label_t}, flowdirs::Matrix{Int8},
+  deps::Vector{Depression{Float64}}}`. The parsed reference hierarchy in
+  the same field types the port produces, so comparison is direct.
+
+- **`prepare_label_and_flowdirs(topo_in, ocean_level)
+  -> (label, flowdirs, topo_clean)`** — Reproduces the ocean-labelling
+  preamble of the upstream `main.cpp`: copies `topo_in`, replaces every
+  `NaN` with `-Inf`, allocates `label` (all `NO_DEP`) and `flowdirs`
+  (all `NO_FLOW`), bucket-fills ocean inward from the edges at
+  `ocean_level`, then marks every `-Inf` cell (and anything the bucket
+  fill already flagged) as `OCEAN`. *Why the `NaN → -Inf` substitution:*
+  the C++ `Array2D` keeps the raw NoData numeric value (e.g. `-9999`),
+  which orders correctly in the dephier priority queue. `read_tif`
+  represents ocean as `NaN`, and `NaN` breaks heap ordering (every
+  comparison is false), so ocean cells would not pop first. `-Inf` is
+  order-equivalent to a very negative NoData and keeps the OCEAN
+  wavefront popping ahead of land — without it the hierarchy would
+  differ from the C++. This helper is used both by `compute_julia_wtd`
+  and by every edge-case test.
+
+- **`diff_grid(name, jl, c) -> (matched::Bool, count::Int, first)`** —
+  Element-by-element comparison of two grids using `isequal`, so that
+  `NaN` compares equal to `NaN` (ordinary `==` would make every ocean
+  cell a spurious mismatch). Returns whether they matched, the
+  mismatch count, and a named tuple describing the first mismatch (or
+  `nothing`). *Why:* used by the depression-hierarchy oracle tests to
+  diff the `label` and `flowdirs` grids and report the first divergence
+  precisely.
+
+- **`diff_depression(jl, c) -> Vector{Tuple{Symbol,Any,Any}}`** —
+  Compares all sixteen `Depression` fields with `isequal` and returns
+  `(field, julia_value, cpp_value)` for each mismatch. *Why:* lets the
+  oracle test pinpoint exactly which field of which depression diverged
+  rather than just "structs differ".
+
+- **`_parse_float(s) -> Float64`** — Parses a float token, special-casing
+  the `nan` / `-nan` / `inf` / `+inf` / `-inf` spellings a C++ ostream
+  emits, otherwise `parse(Float64, s)`. *Why:* Julia's
+  `parse(Float64, ...)` handling of those spellings has varied across
+  versions; the dump contains `inf`/`nan` for sentinel elevations, so
+  parsing has to be explicit to stay version-independent.
+
+- **`_to_julia_flat(i) -> UInt32`** — `i == NO_VALUE ? NO_VALUE : i + 1`.
+  Converts a 0-based C++ flat cell index to a 1-based Julia linear
+  index, leaving the `NO_VALUE` sentinel untouched. *Why:* this is the
+  *only* place the 0-based↔1-based bridge happens. The algorithm port
+  is 1-based throughout; the conversion is confined to the oracle
+  boundary so it can't leak into the algorithm.
+
+## Fixture helpers in `test/fsm_unit_tests.jl`
+
+Used by the ported deterministic unit tests and reused by the edge
+tests.
+
+- **`visual_grid(m) = permutedims(m)`** — Transposes a matrix literal.
+  *Why:* the upstream C++ tests write grid fixtures visually (each
+  source line is a row of the grid). Julia's `M[i, j]` is row `i`, col
+  `j`, but the project convention is `M[x, y]` = column `x`, row `y`
+  (to mirror C++ `Array2D`'s `M(x, y)`). Writing the fixture in visual
+  form and wrapping it in `visual_grid` yields a `(W, H)` array whose
+  `topo[x, y]` equals the C++ source's `topo(x, y)` — so fixtures can
+  be transcribed from the upstream verbatim without hand-transposing.
+
+- **`xy_to_flat(W, H, x, y) -> Int`** — `LinearIndices((W, H))[x+1, y+1]`.
+  Converts a C++ 0-based `(x, y)` coordinate (as written in the
+  upstream test source, e.g. `topo.xyToI(4, 2)`) to a 1-based Julia
+  flat linear index. *Why:* pit/outlet cells in the ported fixtures
+  are specified with the upstream's 0-based coordinates; this keeps the
+  transcription mechanical and the off-by-one in one audited place.
+
+- **`set_edges_ocean!(label)`** — Sets the outer one-cell ring of
+  `label` to `OCEAN`, in place. Mirrors the upstream's
+  `Array2D::setEdges(OCEAN)`. *Why:* several upstream tests (and the
+  random-terrain setup) establish the ocean by labelling the border
+  ring directly rather than by elevation; this reproduces that exactly.
+
+## Fixture helpers in `test/fsm_random_tests.jl`
+
+Drive the property tests over the 70 generated terrains.
+
+- **`RANDOM_TERRAINS_DIR`** — Path constant for
+  `test/test_cases/random/`.
+
+- **`_list_terrains(pattern) -> Vector{String}`** — Returns the sorted
+  list of terrain paths whose filename starts with `pattern` (e.g.
+  `"small_int_"`, `"large_float_"`); empty vector if the directory is
+  absent. *Why:* lets each property test select the relevant subset
+  (integer vs. float, small vs. large) the corresponding upstream
+  `TEST_CASE` used.
+
+- **`_load_random_terrain(path) -> Matrix{Float64}`** — Loads band 1 as
+  a `Float64` matrix **without** the NoData→`NaN` substitution
+  `read_tif` does. *Why:* the generated terrains encode the ocean ring
+  as a numeric `-1.0` (the generator's declared NoData is an unused
+  `-9999`). The property tests need that `-1.0` ring preserved
+  numerically — converting it to `NaN` here would change the input the
+  algorithm sees relative to how the batch was generated.
+
+- **`_init_label_flowdirs(W, H) -> (label, flowdirs)`** — Allocates
+  `label` (all `NO_DEP`) and `flowdirs` (all `NO_FLOW`) and applies
+  `set_edges_ocean!`. *Why:* every property test starts from the same
+  border-ocean setup the upstream randomized tests use; this removes
+  that boilerplate from each test body.
+
+## Independent reference algorithm: `src/priority_flood.jl`
+
+- **`priority_flood_zhou2016!(dem) -> dem`** (plus the file-local
+  helpers `_process_trace_que_onepass!` and `_process_pit_onepass!`) —
+  A from-scratch port of richdem's Zhou (2016) Priority-Flood
+  depression-filling algorithm. *Why it counts as testing-support
+  code:* it is **not** part of Fill-Spill-Merge and nothing in the port
+  depends on it. It exists solely as an *independent* implementation of
+  a different, well-established algorithm so the "heavy flooding"
+  property test can assert that, given abundant water, FSM's final
+  hydrologic surface equals the surface a Priority-Flood fill produces.
+  Two unrelated algorithms agreeing is far stronger evidence of
+  correctness than FSM agreeing with itself. It is documented in detail
+  by its own header comment in the source file.
+
+## C++ data-dump programs in `tools/`
+
+Fully described under Testing → Option B (B.3). Summarised here for
+completeness as testing-support code:
+
+- **`tools/dh_dump.cpp`** — links the vendored C++ dephier, runs the
+  same ocean-labelling + `GetDepressionHierarchy` the upstream does,
+  and serialises the label grid, flow-directions grid, and every
+  `Depression` to the text format `read_dh_dump` parses. It is the
+  producer for the depression-hierarchy oracle.
+
+- **`tools/gen_random_terrains.cpp`** — links the vendored richdem
+  `perlin` and emits the deterministic 70-terrain batch the property
+  tests iterate over.
+
+Both are compiled only by `tools/build.sh` (Option B) and never touched
+by `Pkg.test()` (Option A).
+
+---
+
+# Reference system
+
+The only configuration the port has been exercised on end-to-end.
+Anything close should work; the exact numbers are recorded so
+reproducibility issues can be triaged against a known-good baseline.
 
 | Component | Version |
 |---|---|
@@ -125,75 +451,110 @@ against a known-good baseline.
 | Homebrew LLVM clang | 22.1.5 (`/usr/local/opt/llvm/bin/clang++`, x86_64 prefix) |
 | GDAL | 3.13.0 (Homebrew, x86_64) |
 
-Note on the x86_64 prefix: `tools/build.sh` defaults to `CXX=/usr/local/opt/llvm/bin/clang++` and `-arch x86_64` because the dev machine's Homebrew is installed under `/usr/local` (the Intel prefix, running through Rosetta on Apple Silicon) and its GDAL is an x86_64 build. Override either via env var:
+Only Option B is sensitive to the C++ toolchain rows. `tools/build.sh`
+defaults to `CXX=/usr/local/opt/llvm/bin/clang++` and `-arch x86_64`
+because this machine's Homebrew lives under `/usr/local` (the Intel
+prefix, via Rosetta on Apple Silicon) and its GDAL is an x86_64 build.
+Override for a native ARM toolchain + GDAL:
 
 ```sh
 CXX=clang++ ARCH=arm64 tools/build.sh
 ```
 
-if you have a native ARM toolchain + GDAL. The Julia tests don't care
-about the helper binaries' architecture (they only consume the data
-the binaries produce).
+The Julia tests (Option A) don't care about the helper binaries'
+architecture — they only consume the data those binaries produced.
 
-## Repository layout
+---
+
+# Repository layout
 
 ```
-src/                          Julia port (this is the algorithm)
-  FillSpillMerge.jl           Top-level module; just includes the rest
+src/                          The Julia port (the algorithm itself)
+  FillSpillMerge.jl           Top-level module; includes the rest
   constants.jl                D8 offsets, OCEAN / NO_DEP sentinels
   fp_compare.jl               fp_eq / fp_le / fp_ge (1e-6 tolerance)
-  bucket_fill.jl              BucketFillFromEdges (Phase 1)
-  types.jl                    Depression / Outlet structs (Phase 2)
-  disjoint_set.jl             DisjointDenseIntSet (Phase 2)
-  priority_queue.jl           LIFOMinPriorityQueue (Phase 2)
-  dephier.jl                  GetDepressionHierarchy (Phase 2)
-  fill_spill_merge.jl         FillSpillMerge driver + 9 helpers (Phase 3)
-  priority_flood.jl           Zhou2016 Priority-Flood for cross-check (Phase 4)
+  bucket_fill.jl              BucketFillFromEdges
+  types.jl                    Depression / Outlet structs
+  disjoint_set.jl             DisjointDenseIntSet
+  priority_queue.jl           LIFOMinPriorityQueue
+  dephier.jl                  GetDepressionHierarchy
+  fill_spill_merge.jl         FillSpillMerge driver + 9 helpers
+  priority_flood.jl           Zhou2016 Priority-Flood (independent
+                              reference for the property tests)
 
 test/
   runtests.jl                 Test runner entry point
-  dephier_oracle.jl           Phase 2 oracle helpers (expected-dh.txt parser)
-  fsm_unit_tests.jl           Phase 4 deterministic C++ port (fsm_tests.cpp)
-  fsm_random_tests.jl         Phase 4 random property tests
-  fsm_edge_tests.jl           Phase 4 edge cases + Float32
+  dephier_oracle.jl           expected-dh.txt parser + shared helpers
+  fsm_unit_tests.jl           Ported deterministic C++ unit tests
+  fsm_random_tests.jl         Randomized property tests
+  fsm_edge_tests.jl           Edge cases + Float32
   test_cases/
-    case_01_trough/ ... case_05_perlin_100x100/   Hand-crafted oracle cases
-    random/                                         70 perlin terrains for property tests
+    case_01_trough/ … case_05_perlin_100x100/   Hand-crafted oracle cases
+    random/                                       70 perlin terrains
 
-tools/                        C++ helpers + patches (only for regenerating oracles)
-  dh_dump.cpp                 Dumps GetDepressionHierarchy to expected-dh.txt
-  gen_random_terrains.cpp     Generates the 70-terrain batch
-  build.sh                    Builds both helpers against vendor/
-  patches/                    For-reference diffs vs. upstream (pre-applied in vendor)
-  README.md                   Details on regenerating oracle data
+tools/                        C++ helpers — only used by Option B
+  dh_dump.cpp                 Dumps GetDepressionHierarchy to text
+  gen_random_terrains.cpp     Emits the 70-terrain batch
+  build.sh                    Builds both against vendor/ (or $FSM_CPP)
+  patches/                    Reference diffs vs. upstream
+                              (pre-applied in vendor/; see C++ patches)
 
 vendor/Barnes2020-FillSpillMerge/   Minimal vendored upstream C++ snapshot
-  include/                          FSM C++ header
-  submodules/dephier/include/       dephier headers (deterministic-outlets patch pre-applied)
+  include/fsm/fill_spill_merge.hpp  The C++ FSM header the port mirrors
+  submodules/dephier/include/       dephier headers (tie-break patch applied)
   submodules/dephier/submodules/
-    richdem/include/                richdem headers (GDAL-CSLConstList patch pre-applied)
-    richdem/src/terrain_generation/ perlin source (linked by gen_random_terrains)
-  LICENSE                           MIT (FSM)
-  submodules/dephier/LICENSE        MIT (dephier)
-  submodules/dephier/submodules/richdem/LICENSE.txt   GPL v3 (richdem)
-  README.md                         Vendor scope, upstream commits, patch details
+    richdem/include/                richdem headers (GDAL patch applied)
+    richdem/src/terrain_generation/ perlin source (linked by the generator)
+  LICENSE                                              MIT (FSM)
+  submodules/dephier/LICENSE                           MIT (dephier)
+  submodules/dephier/submodules/richdem/LICENSE.txt    GPL v3 (richdem)
 ```
 
-## Project phases
+---
 
-The port was developed across five distinct phases. Each phase is a
-discrete chunk of functionality with its own oracle, so regressions
-trace back to the phase that introduced them.
+# The vendored C++ snapshot
 
-| Phase | Adds | Oracle |
-|---|---|---|
-| 0 | C++ build, 5 hand-crafted test cases | n/a (setup) |
-| 1 | Constants, fp-compare, BucketFillFromEdges | unit tests |
-| 2 | DisjointDenseIntSet, priority queue, dephier port | `expected-dh.txt` (bit-exact, via patched upstream) |
-| 3 | `fill_spill_merge.jl` (~430 lines, all 10 functions) | `expected-wtd.tif` (1e-9, 1e-6 for case_05) |
-| 4 | Zhou2016 Priority-Flood port, full C++ unit-test port (deterministic + 5 randomized + edge cases + Float32) | direct ports of `unittests/fsm_tests.cpp` + property tests |
+`vendor/Barnes2020-FillSpillMerge/` is a **minimal** snapshot of the
+upstream [Barnes2020-FillSpillMerge](https://github.com/r-barnes/Barnes2020-FillSpillMerge)
+and its two transitive submodules
+[dephier](https://github.com/r-barnes/Barnes2019-DepressionHierarchy)
+and [richdem](https://github.com/r-barnes/richdem). It exists so this
+branch is self-contained for Option B without re-fetching or re-patching
+anything.
 
-## C++ patches: what they change and why they were necessary
+### What is included, and why
+
+| Path | Why |
+|---|---|
+| `include/fsm/fill_spill_merge.hpp` | The C++ FSM header `src/fill_spill_merge.jl` was line-by-line ported from. Kept as the canonical reference even though the test tools don't include it directly. |
+| `submodules/dephier/include/dephier/*.hpp` | dephier headers consumed by `dh_dump.cpp`. |
+| `submodules/dephier/submodules/richdem/include/**` | richdem headers transitively included by dephier and the tools. The whole `include/` tree (~2.4 MB) is kept so the include graph never breaks on an upstream internal-header refactor. |
+| `…/richdem/src/terrain_generation/{PerlinNoise.*,terrain_generation.cpp}` | richdem's perlin implementation, linked into `gen_random_terrains.exe`. |
+
+### What is deliberately omitted
+
+- The upstream `src/main.cpp` and CMake project — so `fsm.exe` cannot be
+  rebuilt here (see Testing → B.5).
+- The upstream `unittests/`, `paper/`, scaling tests, doc trees, and
+  richdem's Python wrappers — none are needed by the Julia tests or the
+  two helper tools.
+- Submodule `.git` directories. The snapshot is flat; the deep
+  `richdem/include/**/README.md` files are upstream's own and are kept
+  intact as part of the faithful third-party snapshot.
+
+### Provenance
+
+Vendored from these exact upstream commits:
+
+| Repo | Commit |
+|---|---|
+| Barnes2020-FillSpillMerge | `1c499ea475c09b9f4c5da74ee5cc995de169db63` |
+| Barnes2019-DepressionHierarchy (dephier) | `411f7d4ad344d74447b47cf9eb85acd536a4d8a1` |
+| richdem | `415032db2f30372111e4cfd37f046e7542ed66f3` |
+
+---
+
+# C++ patches: what they change and why they were necessary
 
 Two small modifications were made to the upstream C++ before it could
 serve as a bit-exact oracle for the Julia port. Both are **pre-applied**
@@ -263,10 +624,10 @@ tie-break because, scientifically, there is nothing to specify — all
 orderings yield equivalent hierarchies with identical whole-tree
 results. The patch only removes an implementation-defined degree of
 freedom so that two independent implementations can be compared
-**bit-for-bit** (the `expected-dh.txt` oracle in Phase 2). The Julia
-port uses the matching key `sort!(outlets, by = o -> (o.out_elev,
-o.depa, o.depb, o.out_cell))`; with both sides sharing the comparator
-the hierarchies are identical.
+**bit-for-bit** (the depression-hierarchy oracle). The Julia port uses
+the matching key `sort!(outlets, by = o -> (o.out_elev, o.depa,
+o.depb, o.out_cell))`; with both sides sharing the comparator the
+hierarchies are identical.
 
 **Cost / risk.** One `std::tie` of three already-present integer fields
 per sort comparison, dominated by the sort itself — negligible runtime
@@ -285,8 +646,8 @@ the `ProcessMetadata` free function (~line 42).
 result of `GDALDataset::GetMetadata()`. In a current GDAL that method
 returns `CSLConstList` (an alias for `const char* const*`), not the
 `char**` the upstream signature expects. This is directly verifiable in
-the GDAL installed on the dev machine — `gdal_majorobject.h:79` in GDAL
-3.13.0 declares:
+the GDAL installed on the reference machine — `gdal_majorobject.h:79`
+in GDAL 3.13.0 declares:
 
 ```cpp
 virtual CSLConstList GetMetadata(const char *pszDomain = "");
@@ -307,22 +668,28 @@ function body is unchanged; `CSLConstList` is exactly the type GDAL now
 hands in, so the patched signature is *more* correct than the original,
 not a workaround. There is no behavioural change — it does not touch
 any algorithm path, only lets the existing code compile against a
-modern GDAL. (It was also independently needed back in Phase 0 just to
-get the reference `fsm.exe` to build at all.)
+modern GDAL. (It was also independently needed early on just to get the
+reference `fsm.exe` to build at all.)
 
-## Licenses
+---
+
+# Licenses
 
 The vendored C++ subtree at `vendor/Barnes2020-FillSpillMerge/`
-preserves the original upstream licenses:
+preserves each upstream repo's original license at its corresponding
+path:
 
-- FSM (top-level): MIT, Copyright (c) 2020 Richard Barnes
-- dephier submodule: MIT, Copyright (c) 2020 Richard Barnes
-- richdem submodule: **GPL v3** — note that the vendored richdem
-  subdirectory carries GPL3 obligations (preserve `LICENSE.txt`, offer
-  source on redistribution).
+- `vendor/Barnes2020-FillSpillMerge/LICENSE` — MIT, Copyright (c) 2020
+  Richard Barnes (FSM).
+- `vendor/Barnes2020-FillSpillMerge/submodules/dephier/LICENSE` — MIT,
+  Copyright (c) 2020 Richard Barnes (dephier).
+- `vendor/Barnes2020-FillSpillMerge/submodules/dephier/submodules/richdem/LICENSE.txt`
+  — **GPL v3** (richdem).
 
-The Julia code under `src/` does not link against richdem at runtime;
-it only reads files produced by separately-invoked C++ binaries
+richdem being GPL3 means the vendored richdem subdirectory carries GPL3
+obligations (preserve `LICENSE.txt`, offer source on redistribution).
+The Julia code under `src/` does not link against richdem at runtime; it
+only reads files produced by separately-invoked C++ binaries
 (`tools/*.exe`), so the GPL's "mere aggregation" reading applies. The
 Julia port's own licensing is left to a top-level `LICENSE` file (not
 yet set on this branch).
