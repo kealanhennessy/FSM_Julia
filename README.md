@@ -97,7 +97,7 @@ them and no C++ is involved.
 | **Depression-hierarchy oracles** | ~250 | `get_depression_hierarchy` run on each of the 5 hand-crafted cases, compared **bit-exact** against `expected-dh.txt` (label grid, flow directions, and every field of every `Depression`). |
 | **Water-table-depth oracles** | 15 | Full FSM run on each of the 5 cases, compared against `expected-wtd.tif` produced by the reference C++ `fsm.exe`. Tolerance 1e-9 for cases 1–4 (exact rationals), 1e-6 for the 100×100 case. |
 | **Ported C++ unit tests** | ~32 | Direct 1:1 ports of every `TEST_CASE` in the upstream `unittests/fsm_tests.cpp` (DepressionVolume, DetermineWaterLevel, MoveWaterIntoPits, BackfillDepression, FillDepressions and its sub-cases, the two "PQ Issue" regressions). Deterministic; no random input. |
-| **Randomized property tests** | ~1130 | Five properties iterated over the 70 generated terrains: surface water is conserved; FSM is idempotent under re-application; incremental vs. bulk water input agree; `MoveWaterIntoPits` is consistent on re-seeding; and a heavy-flood run agrees with an independent Priority-Flood (Zhou 2016) fill. |
+| **Randomized property tests** | ~1130 | Five properties iterated over the 70 generated terrains: surface water is conserved; FSM is idempotent under re-application; incremental vs. bulk water input agree; `MoveWaterIntoPits` is consistent on re-seeding; and a heavy-flood run matches a frozen, trusted-C++ Priority-Flood (Zhou 2016) oracle. |
 | **Edge cases** | ~70 | 1×1 land (throws — needs ocean), all-ocean (throws), lone interior cell absorbed into ocean, monotonic slope (no depressions), a pit filled exactly to its brim, and a full run on `Float32` elevations. |
 
 (The group sizes are approximate because several groups loop over the
@@ -115,6 +115,7 @@ only path that compiles C++.
 |---|---|---|
 | `test/test_cases/case_*/expected-dh.txt` | `tools/dh_dump.exe` | **Yes** — Option B below. |
 | `test/test_cases/random/*.tif` (70 files) | `tools/gen_random_terrains.exe` | **Yes** — Option B below. |
+| `test/test_cases/random_pf/*.tif` (35 files) | `tools/pf_dump.exe` | **Yes** — Option B below. |
 | `test/test_cases/case_*/expected-wtd.tif` | upstream's full `fsm.exe` | **No** — see B.5. |
 
 ### B.2 Prerequisites
@@ -135,7 +136,7 @@ patches pre-applied (see "C++ patches", below).
 tools/build.sh
 ```
 
-This compiles two small standalone programs against the vendored C++
+This compiles three small standalone programs against the vendored C++
 headers (it does **not** use the upstream's CMake, and never modifies
 anything under `vendor/`):
 
@@ -143,6 +144,10 @@ anything under `vendor/`):
   ocean-labeling + `GetDepressionHierarchy` on a GeoTIFF and writes the
   label grid, flow-directions grid, and the full `Depression` vector to
   the plain-text format the depression-hierarchy oracle tests parse.
+- **`tools/pf_dump.exe`** (from `tools/pf_dump.cpp`) — runs the C++
+  Zhou (2016) Priority-Flood on a terrain GeoTIFF and writes the filled
+  DEM back out as a Float64 GeoTIFF. This is the trusted reference the
+  heavy-flooding property test compares FSM against.
 - **`tools/gen_random_terrains.exe`** (from
   `tools/gen_random_terrains.cpp`) — uses richdem's `perlin` to emit a
   deterministic batch of 70 small/large × integer/float terrains.
@@ -167,13 +172,22 @@ done
 
 # The 70-terrain random batch (overwrites test/test_cases/random/*.tif):
 tools/gen_random_terrains.exe test/test_cases/random
+
+# The Priority-Flood oracles, one per float terrain (35 files). Run
+# this whenever the random terrains are regenerated:
+mkdir -p test/test_cases/random_pf
+for f in test/test_cases/random/small_float_*.tif \
+         test/test_cases/random/large_float_*.tif; do
+  tools/pf_dump.exe "$f" "test/test_cases/random_pf/$(basename "$f")"
+done
 ```
 
 Then re-run Option A to confirm the port still matches the refreshed
 data. (Note: regenerating the random terrains rewrites the `.tif`
 files; their *elevation data* is deterministic from `MASTER_SEED`, but
 GeoTIFF headers embed a timestamp, so the files will show as changed in
-git even when the numbers are identical.)
+git even when the numbers are identical. The same applies to the
+Priority-Flood oracle `.tif`s.)
 
 ### B.5 Why `expected-wtd.tif` is different
 
@@ -232,9 +246,12 @@ The reference binary is invoked as
 
 The 70 files under `test/test_cases/random/` are perlin terrains
 (30 small + 5 large, each in integer-truncated and float variants) used
-only by the randomized property tests. They carry no committed
-"expected" output — the property tests assert invariants, not specific
-values.
+only by the randomized property tests. Four of the five property tests
+assert invariants and need no committed "expected" output. The fifth —
+heavy-flooding-vs-Priority-Flood — does compare against a frozen
+reference: `test/test_cases/random_pf/` holds one trusted-C++
+Priority-Flood–filled DEM per *float* terrain (35 files, same
+basenames), produced by `tools/pf_dump.exe`.
 
 ---
 
@@ -242,12 +259,10 @@ values.
 
 None of the code below is part of the Fill-Spill-Merge algorithm. It
 was written purely to make the port testable: parsing reference dumps,
-bridging C++ and Julia indexing conventions, loading fixtures, and
-providing an independent algorithm to cross-check against. It lives in
-`test/` (Julia harness helpers), `src/priority_flood.jl` (an
-independent reference algorithm), and `tools/` (C++ data-dump
-programs). Each item below gives the signature, what it does, and *why*
-it had to exist.
+bridging C++ and Julia indexing conventions, and loading fixtures. It
+lives in `test/` (Julia harness helpers) and `tools/` (C++ programs
+that produce the frozen reference data). Each item below gives the
+signature, what it does, and *why* it had to exist.
 
 ## Harness helpers in `test/runtests.jl`
 
@@ -401,38 +416,37 @@ Drive the property tests over the 70 generated terrains.
   border-ocean setup the upstream randomized tests use; this removes
   that boilerplate from each test body.
 
-## Independent reference algorithm: `src/priority_flood.jl`
+## C++ reference-data programs in `tools/`
 
-- **`priority_flood_zhou2016!(dem) -> dem`** (plus the file-local
-  helpers `_process_trace_que_onepass!` and `_process_pit_onepass!`) —
-  A from-scratch port of richdem's Zhou (2016) Priority-Flood
-  depression-filling algorithm. *Why it counts as testing-support
-  code:* it is **not** part of Fill-Spill-Merge and nothing in the port
-  depends on it. It exists solely as an *independent* implementation of
-  a different, well-established algorithm so the "heavy flooding"
-  property test can assert that, given abundant water, FSM's final
-  hydrologic surface equals the surface a Priority-Flood fill produces.
-  Two unrelated algorithms agreeing is far stronger evidence of
-  correctness than FSM agreeing with itself. It is documented in detail
-  by its own header comment in the source file.
-
-## C++ data-dump programs in `tools/`
-
-Fully described under Testing → Option B (B.3). Summarised here for
-completeness as testing-support code:
+Fully described under Testing → Option B (B.3). Summarised here as
+testing-support code. All three are compiled only by `tools/build.sh`
+(Option B) and never touched by `Pkg.test()` (Option A) — they only
+*produce* the frozen reference data Option A consumes.
 
 - **`tools/dh_dump.cpp`** — links the vendored C++ dephier, runs the
   same ocean-labelling + `GetDepressionHierarchy` the upstream does,
   and serialises the label grid, flow-directions grid, and every
-  `Depression` to the text format `read_dh_dump` parses. It is the
-  producer for the depression-hierarchy oracle.
+  `Depression` to the text format `read_dh_dump` parses. Producer of
+  the depression-hierarchy oracle.
+
+- **`tools/pf_dump.cpp`** — links the vendored C++ richdem Zhou (2016)
+  Priority-Flood, runs it on a terrain GeoTIFF, and writes the filled
+  DEM back out as a Float64 GeoTIFF. Producer of the Priority-Flood
+  oracle under `test/test_cases/random_pf/`. *Why this exists at all:*
+  the heavy-flooding property test needs an *independent* algorithm to
+  cross-check FSM against (two unrelated algorithms agreeing is far
+  stronger evidence than FSM agreeing with itself). Earlier this
+  reference was a Julia re-implementation of Priority-Flood, but a
+  same-author re-implementation has its own unaudited failure modes and
+  no oracle of its own. Dumping the *trusted upstream C++* Priority-Flood
+  output as a frozen oracle — exactly how the dephier and
+  water-table-depth references work — keeps the cross-algorithm
+  independence while grounding the reference in code that is already
+  trusted. (The Julia Priority-Flood port was consequently removed.)
 
 - **`tools/gen_random_terrains.cpp`** — links the vendored richdem
   `perlin` and emits the deterministic 70-terrain batch the property
   tests iterate over.
-
-Both are compiled only by `tools/build.sh` (Option B) and never touched
-by `Pkg.test()` (Option A).
 
 ---
 
@@ -479,8 +493,6 @@ src/                          The Julia port (the algorithm itself)
   priority_queue.jl           LIFOMinPriorityQueue
   dephier.jl                  GetDepressionHierarchy
   fill_spill_merge.jl         FillSpillMerge driver + 9 helpers
-  priority_flood.jl           Zhou2016 Priority-Flood (independent
-                              reference for the property tests)
 
 test/
   runtests.jl                 Test runner entry point
@@ -491,11 +503,13 @@ test/
   test_cases/
     case_01_trough/ … case_05_perlin_100x100/   Hand-crafted oracle cases
     random/                                       70 perlin terrains
+    random_pf/                                    35 C++ Priority-Flood oracles
 
 tools/                        C++ helpers — only used by Option B
   dh_dump.cpp                 Dumps GetDepressionHierarchy to text
+  pf_dump.cpp                 Dumps a C++ Zhou2016 Priority-Flood fill
   gen_random_terrains.cpp     Emits the 70-terrain batch
-  build.sh                    Builds both against vendor/ (or $FSM_CPP)
+  build.sh                    Builds all three against vendor/ (or $FSM_CPP)
   patches/                    Reference diffs vs. upstream
                               (pre-applied in vendor/; see C++ patches)
 

@@ -9,8 +9,9 @@
 #   * `MoveWaterIntoPits Repeatedly` — seeding wtd with the previous
 #     run's pit-cell volumes reproduces the per-depression accumulation.
 #   * `Randomized Heavy Flooding vs Priority-Flood` — FSM with very
-#     large initial wtd produces the same flooded surface as Zhou2016
-#     Priority-Flood applied to the topography alone.
+#     large initial wtd produces the same flooded surface as a frozen
+#     Zhou2016 Priority-Flood oracle (trusted upstream C++, under
+#     test/test_cases/random_pf/) computed from the topography alone.
 #   * `Randomized Testing of Repeated FSM` — applying FSM twice in a
 #     row leaves wtd unchanged after the second run.
 #   * `Randomized Testing of Incremental FSM vs Big Dump` — one bulk
@@ -23,12 +24,16 @@ import FillSpillMerge:
     Depression, dh_label_t,
     get_depression_hierarchy,
     fill_spill_merge!,
-    move_water_into_pits!,
-    priority_flood_zhou2016!
+    move_water_into_pits!
 
 # All terrain files live here. Filename prefix encodes (size class) ×
 # (elev kind) — see tools/gen_random_terrains.cpp.
 const RANDOM_TERRAINS_DIR = joinpath(@__DIR__, "test_cases", "random")
+
+# Frozen Priority-Flood oracles, one per float terrain, produced by the
+# trusted upstream C++ Zhou2016 (tools/pf_dump.cpp). Same basename as
+# the corresponding terrain in RANDOM_TERRAINS_DIR.
+const RANDOM_PF_DIR = joinpath(@__DIR__, "test_cases", "random_pf")
 
 # Lazy lazily-loaded inventory of terrain paths. We iterate over the
 # smaller / integer set by default for speed; the heavy-flooding test
@@ -201,12 +206,21 @@ end
 @testset "C++ port: Randomized Heavy Flooding vs Priority-Flood" begin
     # Mirrors `TEST_CASE("Randomized Heavy Flooding vs Priority-Flood")`.
     # Property: with abundant initial water (wtd = 100), every
-    # depression is filled to its brim. The resulting hydrologic surface
-    # (topo + wtd) should match what Zhou2016 Priority-Flood produces
-    # when applied to the topography alone (since Priority-Flood floods
-    # everything as if water were abundant).
+    # depression is filled to its brim, so the resulting hydrologic
+    # surface (topo + wtd) must equal the depression-filled surface an
+    # independent algorithm — Zhou (2016) Priority-Flood — produces from
+    # the topography alone.
     #
-    # Uses float terrains (not integer-truncated) per the C++.
+    # The Priority-Flood reference is NOT recomputed here. It is a
+    # frozen oracle produced by the trusted upstream C++ Zhou2016
+    # (tools/pf_dump.exe), one .tif per float terrain under
+    # test/test_cases/random_pf/, mirroring how the dephier and
+    # water-table-depth oracles work. This keeps the cross-algorithm
+    # check (FSM vs. an unrelated algorithm) while grounding the
+    # reference in trusted upstream code rather than a same-author
+    # re-implementation.
+    #
+    # Float terrains only (not integer-truncated), per the C++.
     paths = vcat(_list_terrains("small_float_"), _list_terrains("large_float_"))
     @test !isempty(paths)
     for path in paths
@@ -221,13 +235,16 @@ end
         fill_spill_merge!(topo, label, flowdirs, deps, wtd)
         fsm_surface = topo .+ wtd
 
-        # Priority-Flood reference. Operates in-place; copy first.
-        pf_surface = copy(topo_orig)
-        priority_flood_zhou2016!(pf_surface)
+        # Trusted C++ Priority-Flood oracle (same basename as the
+        # terrain). Loaded raw, like the terrain itself, so the numeric
+        # ocean ring is preserved and the comparison spans the whole
+        # grid.
+        oracle_path = joinpath(RANDOM_PF_DIR, basename(path))
+        @test isfile(oracle_path)
+        pf_surface = _load_random_terrain(oracle_path)
 
-        # The C++ tolerance is 1e-6; PF and FSM both leave ocean cells
-        # at their original (numerical) elevation, so the comparison
-        # spans the whole grid.
+        # The C++ test's tolerance is 1e-6; in practice the match is
+        # exact (worst observed diff 0.0 across all 35 float terrains).
         @test maximum(abs.(fsm_surface .- pf_surface)) < 1e-6
     end
 end

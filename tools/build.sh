@@ -2,10 +2,12 @@
 # Build the C++ helper tools that feed FSM_Julia's test suite.
 #
 # Builds (always together — they're cheap):
-#   dh_dump.exe              — Phase 2 dephier oracle dumper (text file
-#                              for test/test_cases/case_*/expected-dh.txt)
-#   gen_random_terrains.exe  — Phase 4 perlin terrain batch generator
-#                              for test/test_cases/random/
+#   dh_dump.exe              — dephier oracle dumper (text file for
+#                              test/test_cases/case_*/expected-dh.txt)
+#   pf_dump.exe              — Zhou2016 Priority-Flood oracle dumper
+#                              (filled DEM .tif for test/test_cases/random_pf/)
+#   gen_random_terrains.exe  — perlin terrain batch generator for
+#                              test/test_cases/random/
 #
 # Neither tool touches the upstream CMakeLists; everything compiles
 # standalone against a minimal vendored snapshot of the C++ FSM headers
@@ -71,6 +73,11 @@ set -x
   "$SCRIPT_DIR/dh_dump.cpp" \
   $GDAL_LIBS \
   -o "$SCRIPT_DIR/dh_dump.exe"
+
+"${CXX_COMMON[@]}" \
+  "$SCRIPT_DIR/pf_dump.cpp" \
+  $GDAL_LIBS \
+  -o "$SCRIPT_DIR/pf_dump.exe"
 
 "${CXX_COMMON[@]}" \
   "$SCRIPT_DIR/gen_random_terrains.cpp" \

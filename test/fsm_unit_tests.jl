@@ -28,8 +28,7 @@ import FillSpillMerge:
     move_water_into_pits!,
     backfill_depression!,
     determine_water_level!,
-    fill_depressions!,
-    priority_flood_zhou2016!
+    fill_depressions!
 
 # Transpose a visually-laid-out matrix literal into the algorithm's
 # (W, H) `M[x, y]` layout.
