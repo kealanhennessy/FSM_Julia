@@ -193,6 +193,123 @@ trace back to the phase that introduced them.
 | 3 | `fill_spill_merge.jl` (~430 lines, all 10 functions) | `expected-wtd.tif` (1e-9, 1e-6 for case_05) |
 | 4 | Zhou2016 Priority-Flood port, full C++ unit-test port (deterministic + 5 randomized + edge cases + Float32) | direct ports of `unittests/fsm_tests.cpp` + property tests |
 
+## C++ patches: what they change and why they were necessary
+
+Two small modifications were made to the upstream C++ before it could
+serve as a bit-exact oracle for the Julia port. Both are **pre-applied**
+in `vendor/Barnes2020-FillSpillMerge/` and reproduced as standalone
+diffs in `tools/patches/`. Neither was pushed upstream (the upstream
+repo belongs to a different author). The justification for each follows
+so the modifications can be defended on review.
+
+### Patch 1 — deterministic outlet tie-break in dephier
+
+**File:** `submodules/dephier/include/dephier/dephier.hpp`, in
+`GetDepressionHierarchy`, the outlet sort (~line 620).
+
+**Upstream code** sorts candidate outlets by elevation only:
+
+```cpp
+std::sort(outlets.begin(), outlets.end(),
+  [](const Outlet<elev_t> &a, const Outlet<elev_t> &b){
+    return a.out_elev < b.out_elev;
+  });
+```
+
+**Patched code** adds a total-order tie-break:
+
+```cpp
+std::sort(outlets.begin(), outlets.end(),
+  [](const Outlet<elev_t> &a, const Outlet<elev_t> &b){
+    return std::tie(a.out_elev, a.depa, a.depb, a.out_cell)
+         < std::tie(b.out_elev, b.depa, b.depb, b.out_cell);
+  });
+```
+
+**Why it is necessary.** When two outlets sit at *exactly* the same
+elevation, the upstream comparator treats them as equivalent, so their
+final relative order is decided by two implementation-defined factors:
+
+1. `std::sort` is **not stable** — equal elements may be reordered
+   arbitrarily by the standard library's sort implementation.
+2. The outlets are copied out of a `std::unordered_map`, whose
+   **iteration order is unspecified** by the C++ standard.
+
+A single compiled binary is self-consistent (same result every run on
+that build), so the upstream never needed to pin this down. But a
+re-implementation in another language cannot reproduce libc++/libstdc++
+sort internals or a particular `unordered_map` bucket layout, so the
+two implementations diverge on equal-elevation ties.
+
+**Why the divergence matters for testing but not for the science.**
+Different tie orderings produce *different binary trees that encode the
+same physical depression structure*:
+
+- Leaf depressions (one per pit cell) are unaffected — the watershed
+  traversal that creates them is fully deterministic.
+- Meta-depressions are formed by merging adjacent depressions when
+  their shared outlet is processed. With several equally-low outlets, a
+  different processing order merges a different pair first, yielding a
+  tree of identical physical content but different shape.
+- `CalculateMarginalVolumes` walks each cell up its parent chain until
+  it finds a depression whose `out_elev` exceeds the cell's elevation.
+  A different tree shape changes which meta-depression a cell is
+  attributed to, so per-depression `cell_count` / `total_elevation` /
+  `dep_vol` can differ between orderings — even though the totals over
+  the whole tree are identical.
+
+So the patch does not "fix a bug": Barnes (2020) does not specify a
+tie-break because, scientifically, there is nothing to specify — all
+orderings yield equivalent hierarchies with identical whole-tree
+results. The patch only removes an implementation-defined degree of
+freedom so that two independent implementations can be compared
+**bit-for-bit** (the `expected-dh.txt` oracle in Phase 2). The Julia
+port uses the matching key `sort!(outlets, by = o -> (o.out_elev,
+o.depa, o.depb, o.out_cell))`; with both sides sharing the comparator
+the hierarchies are identical.
+
+**Cost / risk.** One `std::tie` of three already-present integer fields
+per sort comparison, dominated by the sort itself — negligible runtime
+cost, zero change to any scientifically-meaningful output.
+
+### Patch 2 — GDAL `CSLConstList` compatibility in richdem
+
+**File:**
+`submodules/dephier/submodules/richdem/include/richdem/common/Array2D.hpp`,
+the `ProcessMetadata` free function (~line 42).
+
+**Change:** the parameter type goes from `char **metadata` to
+`CSLConstList metadata` (one token).
+
+**Why it is necessary.** richdem calls `ProcessMetadata` with the
+result of `GDALDataset::GetMetadata()`. In a current GDAL that method
+returns `CSLConstList` (an alias for `const char* const*`), not the
+`char**` the upstream signature expects. This is directly verifiable in
+the GDAL installed on the dev machine — `gdal_majorobject.h:79` in GDAL
+3.13.0 declares:
+
+```cpp
+virtual CSLConstList GetMetadata(const char *pszDomain = "");
+```
+
+Passing a `const char* const*` to a `char**` parameter is a
+const-correctness violation and a hard compile error: the upstream
+simply **does not compile** against this GDAL, so there is no way to
+build `dh_dump.exe` / `gen_random_terrains.exe` (or upstream's own
+`fsm.exe`) without the change. (The `char**` signature was valid
+against the older GDAL the upstream was originally written for; the
+return type was narrowed to `CSLConstList` somewhere in the GDAL 3.x
+series — the exact minor version isn't pinned here because the
+justification rests only on the GDAL actually in use, 3.13.0.)
+
+**Why it is safe.** This is a pure build-compatibility fix. The
+function body is unchanged; `CSLConstList` is exactly the type GDAL now
+hands in, so the patched signature is *more* correct than the original,
+not a workaround. There is no behavioural change — it does not touch
+any algorithm path, only lets the existing code compile against a
+modern GDAL. (It was also independently needed back in Phase 0 just to
+get the reference `fsm.exe` to build at all.)
+
 ## Licenses
 
 The vendored C++ subtree at `vendor/Barnes2020-FillSpillMerge/`

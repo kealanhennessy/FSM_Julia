@@ -66,10 +66,12 @@ upstream clone can re-derive the same state.
 2. **`richdem-gdal-cslconstlist.patch`** — changes the `ProcessMetadata`
    parameter type in
    `submodules/dephier/submodules/richdem/include/richdem/common/Array2D.hpp`
-   from `char**` to `CSLConstList`, matching the signature
-   GDAL ≥ 3.7 exposes for `GDALDataset::GetMetadata()`. The upstream
-   compiles fine against older GDAL but not against the version on the
-   port author's machine.
+   from `char**` to `CSLConstList`, matching the signature a current
+   GDAL exposes for `GDALDataset::GetMetadata()` (verified against GDAL
+   3.13.0 on the dev machine, `gdal_majorobject.h:79`). The upstream
+   compiles fine against the older GDAL it was written for but not
+   against the version on the port author's machine. See the FSM_Julia
+   root `README.md` section "C++ patches" for the full rationale.
 
 Neither patch was pushed upstream — see `FSM_Julia/tools/patches/`
 header notes and the project memory for context.
