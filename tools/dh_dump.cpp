@@ -4,17 +4,18 @@
 // to a single text file the Julia tests can parse.
 //
 // Lives here (FSM_Julia/tools/) because it only exists to feed the
-// Julia tests. It builds against the vendored C++ snapshot at
-// ../vendor/Barnes2020-FillSpillMerge/ — see build.sh next to this file
-// for the compile command, and the repository root README.md ("The
-// vendored C++ snapshot") for scope.
+// Julia tests. It builds against your own clone of the upstream C++
+// Barnes2020-FillSpillMerge (no copy is bundled in this repo) — see
+// build.sh next to this file for the compile command, and the
+// repository root README.md ("Testing" -> Option B) for the clone +
+// checkout + patch recipe.
 //
-// The vendored dephier.hpp has the deterministic outlet sort comparator
-// (tie-break on depa, depb, out_cell) pre-applied, so the dumped
-// depression vector matches Julia's get_depression_hierarchy
-// bit-for-bit out of the box. See
-// FSM_Julia/tools/patches/dephier-deterministic-outlets.patch for the
-// underlying diff vs. upstream.
+// The dumped depression vector only matches Julia's
+// get_depression_hierarchy bit-for-bit if the upstream clone has the
+// deterministic outlet sort comparator (tie-break on depa, depb,
+// out_cell) applied. That patch is
+// FSM_Julia/tools/patches/dephier-deterministic-outlets.patch; Option
+// B in the README walks through applying it.
 //
 // Usage:
 //   dh_dump.exe <input.tif> <ocean_level> <output.txt>

@@ -6,16 +6,19 @@ type narrowed is not pinned; the justification rests on the GDAL
 actually in use. See the repository root README.md, section
 "C++ patches", for the full rationale.
 
-**Status:** PRE-APPLIED in
-`vendor/Barnes2020-FillSpillMerge/submodules/dephier/submodules/richdem/include/richdem/common/Array2D.hpp`.
-This file is here for audit (see exactly what diverges from upstream)
-and refresh (re-derive the vendored state from a clean upstream clone).
-The Julia tests do not need this patch to be applied at build time. Do
-NOT push upstream.
+**Status:** REQUIRED before building the helper tools (or upstream's
+own fsm.exe) against a modern GDAL. There is no bundled/patched copy of
+the C++ in this repo; you apply this to your own upstream clone. The
+Julia test suite itself (`Pkg.test()`, "Option A") does NOT need this
+— it only matters when regenerating oracle data ("Option B"). Do NOT
+push upstream.
 
-Refresh recipe:
+Apply against the richdem submodule of an upstream clone checked out at
+the pinned commit (parent Barnes2020-FillSpillMerge
+`1c499ea475c09b9f4c5da74ee5cc995de169db63`, which pins richdem to
+`415032db2f30372111e4cfd37f046e7542ed66f3`):
 
-  cd <fresh-upstream-clone>/submodules/dephier/submodules/richdem
+  cd <upstream-clone>/submodules/dephier/submodules/richdem
   git apply <FSM_Julia>/tools/patches/richdem-gdal-cslconstlist.patch
 
 diff --git a/include/richdem/common/Array2D.hpp b/include/richdem/common/Array2D.hpp

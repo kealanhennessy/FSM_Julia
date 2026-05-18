@@ -5,17 +5,23 @@ implementation-defined, which prevents bit-exact comparison against the
 Julia port (the leaf depressions match, but parent/child assignments
 and per-meta-dep aggregate fields can differ).
 
-**Status:** PRE-APPLIED in
-`vendor/Barnes2020-FillSpillMerge/submodules/dephier/include/dephier/dephier.hpp`.
-This file is here for two reasons only: (1) audit — to see exactly what
-diverges from upstream, and (2) refresh — to re-derive the vendored
-state from a clean upstream clone. The Julia tests do not need this
-patch to be applied at build time. Do NOT push upstream.
+**Status:** REQUIRED before building the helper tools (or upstream's
+own fsm.exe). There is no bundled/patched copy of the C++ in this repo;
+you apply this to your own upstream clone. The Julia test suite itself
+(`Pkg.test()`, "Option A") does NOT need this — it only matters when
+regenerating oracle data ("Option B"). Do NOT push upstream.
 
-Refresh recipe:
+Apply against the dephier submodule of an upstream clone checked out at
+the pinned commit (parent Barnes2020-FillSpillMerge
+`1c499ea475c09b9f4c5da74ee5cc995de169db63`, which pins dephier to
+`411f7d4ad344d74447b47cf9eb85acd536a4d8a1`):
 
-  cd <fresh-upstream-clone>/submodules/dephier
+  cd <upstream-clone>/submodules/dephier
   git apply <FSM_Julia>/tools/patches/dephier-deterministic-outlets.patch
+
+See the FSM_Julia root README.md, "Testing" -> Option B, for the full
+clone + checkout + patch + build recipe and the rationale ("C++
+patches" section).
 
 diff --git a/include/dephier/dephier.hpp b/include/dephier/dephier.hpp
 index 47bb95c..3a6f83f 100644

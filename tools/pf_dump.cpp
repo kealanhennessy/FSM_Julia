@@ -18,8 +18,10 @@
 // Zhou2016 does not special-case NoData, so it processes the same grid
 // values the Julia side sees — the two stay comparable.
 //
-// Builds against the vendored C++ snapshot; see tools/build.sh and the
-// repository root README.md ("Testing" -> Option B).
+// Builds against your own clone of the upstream C++
+// Barnes2020-FillSpillMerge (no copy is bundled in this repo); see
+// tools/build.sh and the repository root README.md ("Testing" ->
+// Option B) for the clone + checkout + patch recipe.
 //
 // Usage:
 //   pf_dump.exe <input.tif> <output.tif>

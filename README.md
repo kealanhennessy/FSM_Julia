@@ -5,11 +5,14 @@ Barnes ([2020](https://github.com/r-barnes/Barnes2020-FillSpillMerge)).
 The port is line-by-line faithful to the upstream so that outputs match
 the reference `fsm.exe` bit-for-bit on the committed test cases.
 
-This branch is **self-contained**: a minimal copy of the upstream C++
-sources is vendored at `vendor/Barnes2020-FillSpillMerge/`, so cloning
-the repo gives you everything needed to run the full test suite *and* to
-regenerate the reference data — no external repositories to fetch, no
-patches to apply.
+Running the test suite is **fully self-contained** — clone the repo,
+have Julia, done. No C++ toolchain, no external repositories. All the
+reference data the tests compare against is committed here.
+
+Regenerating that reference data (a rare maintenance task) is the only
+thing that needs the upstream C++. This repo does **not** bundle a copy
+of it; instead it ships the exact patches and step-by-step instructions
+for setting up your own upstream clone. See Testing → Option B.
 
 ## Quick start
 
@@ -19,7 +22,7 @@ cd FSM_Julia
 julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
-Expected: `Pkg.test()` reports `1665 / 1665 pass` in roughly 6 seconds.
+Expected: `Pkg.test()` reports `1700 / 1700 pass` in roughly 7 seconds.
 Nothing besides Julia is needed for this — see Testing → Option A.
 
 ---
@@ -40,10 +43,11 @@ independent of each other:
   compiles C++.
 
 The relationship between them: Option B *produces* the frozen reference
-files (`expected-dh.txt`, the random terrain `.tif`s, and historically
-`expected-wtd.tif`); Option A *consumes* them. The C++ in `vendor/` and
-`tools/` exists solely to support Option B. It is never touched by
-Option A.
+files (`expected-dh.txt`, the random terrain `.tif`s, the Priority-Flood
+oracles, and `expected-wtd.tif`); Option A *consumes* them. The `tools/`
+programs and the patches in `tools/patches/` exist solely to support
+Option B, against an upstream clone you set up yourself. Nothing in
+Option B is touched by Option A.
 
 ## Option A — Run the test suite
 
@@ -77,7 +81,7 @@ Expected final output:
 
 ```
 Test Summary:  | Pass  Total  Time
-FillSpillMerge | 1665   1665  ~6s
+FillSpillMerge | 1700   1700  ~7s
 ```
 
 ### A.3 What it actually does
@@ -107,64 +111,103 @@ them and no C++ is involved.
 
 You only need this if you changed the algorithm or a test fixture and
 must rebuild the reference data Option A compares against. It is the
-only path that compiles C++.
+only path that compiles C++, and the only thing that needs the upstream
+C++ project. This repo intentionally does **not** bundle the upstream;
+you set up your own clone once (B.2), and from then on regenerating any
+oracle is mechanical.
 
 ### B.1 What the reference data is, and what regenerates it
 
-| Reference file(s) | Produced by | Regenerable from this repo? |
-|---|---|---|
-| `test/test_cases/case_*/expected-dh.txt` | `tools/dh_dump.exe` | **Yes** — Option B below. |
-| `test/test_cases/random/*.tif` (70 files) | `tools/gen_random_terrains.exe` | **Yes** — Option B below. |
-| `test/test_cases/random_pf/*.tif` (35 files) | `tools/pf_dump.exe` | **Yes** — Option B below. |
-| `test/test_cases/case_*/expected-wtd.tif` | upstream's full `fsm.exe` | **No** — see B.5. |
+Every file below is committed; this is just what *produces* each when
+you regenerate. All four require the upstream-clone setup in B.2.
 
-### B.2 Prerequisites
+| Reference file(s) | Produced by |
+|---|---|
+| `test/test_cases/case_*/expected-dh.txt` | `tools/dh_dump.exe` |
+| `test/test_cases/random/*.tif` (70 files) | `tools/gen_random_terrains.exe` |
+| `test/test_cases/random_pf/*.tif` (35 files) | `tools/pf_dump.exe` |
+| `test/test_cases/case_*/expected-wtd.tif` | upstream's own `fsm.exe` |
 
-- A C++17 compiler and GDAL development headers/libraries.
-- On the reference machine: `brew install llvm gdal`. The build script
-  defaults to the Homebrew LLVM clang and an x86_64 target (see
-  Reference system, below); override `CXX=` / `ARCH=` if your toolchain
-  differs.
+The first three come from the small helper programs in `tools/`; the
+last from the upstream's own `fsm.exe`. All four are built from the
+same patched upstream clone.
 
-No upstream checkout or patching is required: the vendored C++ snapshot
-under `vendor/Barnes2020-FillSpillMerge/` already has the two required
-patches pre-applied (see "C++ patches", below).
+### B.2 One-time setup: clone, pin, patch the upstream
 
-### B.3 Build the helper programs
+You need a C++17 compiler, GDAL (with `gdal-config` on `PATH`), CMake,
+and `git`. On macOS: `brew install gdal cmake`. On Debian/Ubuntu:
+`apt install g++ libgdal-dev cmake git`.
+
+The patches were generated against specific upstream commits. Check the
+parent repo out at that commit so its submodules resolve to the matching
+pinned revisions, then apply the two patches:
 
 ```sh
-tools/build.sh
+# Pinned upstream commits (parent repo pins the two submodules):
+#   Barnes2020-FillSpillMerge          1c499ea475c09b9f4c5da74ee5cc995de169db63
+#   Barnes2019-DepressionHierarchy     411f7d4ad344d74447b47cf9eb85acd536a4d8a1  (submodules/dephier)
+#   richdem                            415032db2f30372111e4cfd37f046e7542ed66f3  (…/richdem)
+
+git clone https://github.com/r-barnes/Barnes2020-FillSpillMerge.git
+cd Barnes2020-FillSpillMerge
+git checkout 1c499ea475c09b9f4c5da74ee5cc995de169db63
+git submodule update --init --recursive   # pulls the pinned submodule commits
+
+# Apply this port's two required patches (rationale in "C++ patches",
+# below). $FSM_JULIA = path to your clone of THIS repo.
+git -C submodules/dephier apply \
+  "$FSM_JULIA/tools/patches/dephier-deterministic-outlets.patch"
+git -C submodules/dephier/submodules/richdem apply \
+  "$FSM_JULIA/tools/patches/richdem-gdal-cslconstlist.patch"
+
+export FSM_CPP="$PWD"          # used by tools/build.sh in B.3
 ```
 
-This compiles three small standalone programs against the vendored C++
-headers (it does **not** use the upstream's CMake, and never modifies
-anything under `vendor/`):
+Newer upstream HEAD may have moved the patched lines; checking out the
+pinned commit above is what guarantees the patches apply cleanly. How
+you make GDAL/CMake happy on your platform (package versions,
+cross-arch, etc.) is left to you — that's deliberately *your* setup, not
+something this repo tries to abstract.
 
-- **`tools/dh_dump.exe`** (from `tools/dh_dump.cpp`) — runs the C++
-  ocean-labeling + `GetDepressionHierarchy` on a GeoTIFF and writes the
-  label grid, flow-directions grid, and the full `Depression` vector to
-  the plain-text format the depression-hierarchy oracle tests parse.
-- **`tools/pf_dump.exe`** (from `tools/pf_dump.cpp`) — runs the C++
-  Zhou (2016) Priority-Flood on a terrain GeoTIFF and writes the filled
-  DEM back out as a Float64 GeoTIFF. This is the trusted reference the
-  heavy-flooding property test compares FSM against.
-- **`tools/gen_random_terrains.exe`** (from
-  `tools/gen_random_terrains.cpp`) — uses richdem's `perlin` to emit a
-  deterministic batch of 70 small/large × integer/float terrains.
+### B.3 Build everything against that clone
+
+```sh
+# (a) The three helper programs. FSM_CPP must point at the patched
+#     clone from B.2. tools/build.sh uses `c++` from PATH and the
+#     host's native architecture; no machine-specific paths are baked
+#     in. Two optional overrides for unusual setups:
+#       CXX=    a specific compiler (e.g. /usr/local/opt/llvm/bin/clang++)
+#       ARCH=   cross-target, needed ONLY if your GDAL's arch differs
+#               from the host (classic case: Apple Silicon with an
+#               x86_64 Homebrew GDAL -> ARCH=x86_64)
+cd "$FSM_JULIA"
+tools/build.sh                 # builds tools/{dh_dump,pf_dump,gen_random_terrains}.exe
+
+# (b) The upstream's own fsm.exe, via its CMake (for expected-wtd.tif).
+#     Match the same arch as your GDAL if cross-building.
+cmake -S "$FSM_CPP" -B "$FSM_CPP/build" -DUSE_GDAL=ON
+cmake --build "$FSM_CPP/build" --target fsm.exe
+```
+
+What the helper programs do:
+
+- **`tools/dh_dump.exe`** — runs the C++ ocean-labeling +
+  `GetDepressionHierarchy` on a GeoTIFF and writes the label grid,
+  flow-directions grid, and full `Depression` vector to the plain-text
+  format the depression-hierarchy oracle tests parse.
+- **`tools/pf_dump.exe`** — runs the C++ Zhou (2016) Priority-Flood on
+  a terrain GeoTIFF and writes the filled DEM back out as a Float64
+  GeoTIFF. The trusted reference the heavy-flooding property test
+  compares FSM against.
+- **`tools/gen_random_terrains.exe`** — uses richdem's `perlin` to emit
+  the deterministic batch of 70 small/large × integer/float terrains.
   Bumping `MASTER_SEED` in the source yields a fresh batch.
 
-`tools/build.sh` resolves the C++ root from the `FSM_CPP` environment
-variable, defaulting to `vendor/Barnes2020-FillSpillMerge/`. Point it at
-a full upstream clone instead if you need to rebuild `fsm.exe` (the
-vendored subset cannot — see B.5):
+### B.4 Regenerate the oracles
 
 ```sh
-FSM_CPP=/path/to/full/Barnes2020-FillSpillMerge tools/build.sh
-```
+cd "$FSM_JULIA"
 
-### B.4 Regenerate the regenerable oracles
-
-```sh
 # Depression-hierarchy oracles (one expected-dh.txt per case):
 for d in test/test_cases/case_*; do
   tools/dh_dump.exe "$d/input.tif" 0.0 "$d/expected-dh.txt"
@@ -180,27 +223,24 @@ for f in test/test_cases/random/small_float_*.tif \
          test/test_cases/random/large_float_*.tif; do
   tools/pf_dump.exe "$f" "test/test_cases/random_pf/$(basename "$f")"
 done
+
+# The water-table-depth oracles. run_all.sh (and each case's run.sh)
+# requires FSM_EXE — there is no default path. Each case's run.sh
+# already encodes that case's ocean_level / --swl (see Test cases).
+FSM_EXE="$FSM_CPP/build/fsm.exe" test/test_cases/run_all.sh
 ```
 
-Then re-run Option A to confirm the port still matches the refreshed
-data. (Note: regenerating the random terrains rewrites the `.tif`
-files; their *elevation data* is deterministic from `MASTER_SEED`, but
-GeoTIFF headers embed a timestamp, so the files will show as changed in
-git even when the numbers are identical. The same applies to the
-Priority-Flood oracle `.tif`s.)
+### B.5 Re-verify
 
-### B.5 Why `expected-wtd.tif` is different
+```sh
+julia --project=. -e 'using Pkg; Pkg.test()'
+```
 
-The water-table-depth oracles were produced by the upstream's full
-`fsm.exe`, which is built from `src/main.cpp` plus the rest of the
-upstream source tree. The vendored snapshot deliberately includes only
-the headers and perlin source the two helper tools need (~2.6 MB), not
-`src/main.cpp` or the upstream CMake project, so it **cannot** rebuild
-`fsm.exe`. The committed `expected-wtd.tif` files remain the frozen
-oracle. To refresh them you must clone the full upstream
-Barnes2020-FillSpillMerge, apply the two patches in `tools/patches/`,
-build via its CMake, and run `fsm.exe` per case with that case's
-`ocean_level` / `--swl` (see the Test cases table).
+Note: regenerating the random terrains rewrites the `.tif` files; their
+*elevation data* is deterministic from `MASTER_SEED`, but GeoTIFF
+headers embed a timestamp, so the files will show as changed in git
+even when the numbers are identical. The same applies to the
+Priority-Flood oracle `.tif`s.
 
 ---
 
@@ -423,15 +463,16 @@ testing-support code. All three are compiled only by `tools/build.sh`
 (Option B) and never touched by `Pkg.test()` (Option A) — they only
 *produce* the frozen reference data Option A consumes.
 
-- **`tools/dh_dump.cpp`** — links the vendored C++ dephier, runs the
-  same ocean-labelling + `GetDepressionHierarchy` the upstream does,
-  and serialises the label grid, flow-directions grid, and every
+- **`tools/dh_dump.cpp`** — links your upstream C++ dephier clone (B.2),
+  runs the same ocean-labelling + `GetDepressionHierarchy` the upstream
+  does, and serialises the label grid, flow-directions grid, and every
   `Depression` to the text format `read_dh_dump` parses. Producer of
   the depression-hierarchy oracle.
 
-- **`tools/pf_dump.cpp`** — links the vendored C++ richdem Zhou (2016)
-  Priority-Flood, runs it on a terrain GeoTIFF, and writes the filled
-  DEM back out as a Float64 GeoTIFF. Producer of the Priority-Flood
+- **`tools/pf_dump.cpp`** — links your upstream C++ richdem clone's
+  Zhou (2016) Priority-Flood, runs it on a terrain GeoTIFF, and writes
+  the filled DEM back out as a Float64 GeoTIFF. Producer of the
+  Priority-Flood
   oracle under `test/test_cases/random_pf/`. *Why this exists at all:*
   the heavy-flooding property test needs an *independent* algorithm to
   cross-check FSM against (two unrelated algorithms agreeing is far
@@ -444,9 +485,9 @@ testing-support code. All three are compiled only by `tools/build.sh`
   independence while grounding the reference in code that is already
   trusted. (The Julia Priority-Flood port was consequently removed.)
 
-- **`tools/gen_random_terrains.cpp`** — links the vendored richdem
-  `perlin` and emits the deterministic 70-terrain batch the property
-  tests iterate over.
+- **`tools/gen_random_terrains.cpp`** — links your upstream C++ richdem
+  clone's `perlin` and emits the deterministic 70-terrain batch the
+  property tests iterate over.
 
 ---
 
@@ -462,21 +503,28 @@ reproducibility issues can be triaged against a known-good baseline.
 | RAM | 16 GB |
 | OS | macOS Tahoe 26.3.1 |
 | Julia | 1.12.6 |
-| Homebrew LLVM clang | 22.1.5 (`/usr/local/opt/llvm/bin/clang++`, x86_64 prefix) |
-| GDAL | 3.13.0 (Homebrew, x86_64) |
+| C++ compiler (Option B only) | Apple clang (`c++`), or Homebrew LLVM clang 22.1.5 |
+| GDAL (Option B only) | 3.13.0 (Homebrew, x86_64) |
 
-Only Option B is sensitive to the C++ toolchain rows. `tools/build.sh`
-defaults to `CXX=/usr/local/opt/llvm/bin/clang++` and `-arch x86_64`
-because this machine's Homebrew lives under `/usr/local` (the Intel
-prefix, via Rosetta on Apple Silicon) and its GDAL is an x86_64 build.
-Override for a native ARM toolchain + GDAL:
+Only Option B touches a C++ toolchain at all; Option A is pure Julia.
+Nothing in the repo hardcodes a path on this machine. `tools/build.sh`
+uses `c++` from `PATH` and the host's native architecture by default.
+
+This particular machine has one wrinkle worth recording: its Homebrew
+(and therefore its GDAL) lives under `/usr/local` — the Intel prefix,
+running via Rosetta on Apple Silicon — so GDAL is an x86_64 build while
+the host is arm64. On a setup like that, the helper tools must be
+cross-built for x86_64:
 
 ```sh
-CXX=clang++ ARCH=arm64 tools/build.sh
+ARCH=x86_64 tools/build.sh
 ```
 
-The Julia tests (Option A) don't care about the helper binaries'
-architecture — they only consume the data those binaries produced.
+On a machine where GDAL matches the host architecture (a plain
+`brew install gdal` on Apple Silicon, or any Linux box), no override is
+needed — just `tools/build.sh`. The Julia tests (Option A) don't care
+about the helper binaries' architecture; they only consume the data
+those binaries produced.
 
 ---
 
@@ -509,73 +557,48 @@ tools/                        C++ helpers — only used by Option B
   dh_dump.cpp                 Dumps GetDepressionHierarchy to text
   pf_dump.cpp                 Dumps a C++ Zhou2016 Priority-Flood fill
   gen_random_terrains.cpp     Emits the 70-terrain batch
-  build.sh                    Builds all three against vendor/ (or $FSM_CPP)
-  patches/                    Reference diffs vs. upstream
-                              (pre-applied in vendor/; see C++ patches)
-
-vendor/Barnes2020-FillSpillMerge/   Minimal vendored upstream C++ snapshot
-  include/fsm/fill_spill_merge.hpp  The C++ FSM header the port mirrors
-  submodules/dephier/include/       dephier headers (tie-break patch applied)
-  submodules/dephier/submodules/
-    richdem/include/                richdem headers (GDAL patch applied)
-    richdem/src/terrain_generation/ perlin source (linked by the generator)
-  LICENSE                                              MIT (FSM)
-  submodules/dephier/LICENSE                           MIT (dephier)
-  submodules/dephier/submodules/richdem/LICENSE.txt    GPL v3 (richdem)
+  build.sh                    Builds all three against $FSM_CPP (your
+                              upstream clone — see Testing → Option B)
+  patches/                    The two required upstream patches + the
+                              pinned commits they apply against
 ```
+
+No upstream C++ is bundled in this repo. The `tools/` programs and
+upstream `fsm.exe` build against a clone you set up yourself (Testing →
+Option B); the patches and exact commit SHAs needed to reproduce that
+setup live in `tools/patches/`.
 
 ---
 
-# The vendored C++ snapshot
+# Upstream C++ provenance
 
-`vendor/Barnes2020-FillSpillMerge/` is a **minimal** snapshot of the
-upstream [Barnes2020-FillSpillMerge](https://github.com/r-barnes/Barnes2020-FillSpillMerge)
-and its two transitive submodules
-[dephier](https://github.com/r-barnes/Barnes2019-DepressionHierarchy)
-and [richdem](https://github.com/r-barnes/richdem). It exists so this
-branch is self-contained for Option B without re-fetching or re-patching
-anything.
-
-### What is included, and why
-
-| Path | Why |
-|---|---|
-| `include/fsm/fill_spill_merge.hpp` | The C++ FSM header `src/fill_spill_merge.jl` was line-by-line ported from. Kept as the canonical reference even though the test tools don't include it directly. |
-| `submodules/dephier/include/dephier/*.hpp` | dephier headers consumed by `dh_dump.cpp`. |
-| `submodules/dephier/submodules/richdem/include/**` | richdem headers transitively included by dephier and the tools. The whole `include/` tree (~2.4 MB) is kept so the include graph never breaks on an upstream internal-header refactor. |
-| `…/richdem/src/terrain_generation/{PerlinNoise.*,terrain_generation.cpp}` | richdem's perlin implementation, linked into `gen_random_terrains.exe`. |
-
-### What is deliberately omitted
-
-- The upstream `src/main.cpp` and CMake project — so `fsm.exe` cannot be
-  rebuilt here (see Testing → B.5).
-- The upstream `unittests/`, `paper/`, scaling tests, doc trees, and
-  richdem's Python wrappers — none are needed by the Julia tests or the
-  two helper tools.
-- Submodule `.git` directories. The snapshot is flat; the deep
-  `richdem/include/**/README.md` files are upstream's own and are kept
-  intact as part of the faithful third-party snapshot.
-
-### Provenance
-
-Vendored from these exact upstream commits:
+The reference data (and anything you regenerate in Option B) is produced
+from these exact upstream commits — the parent repo pins its two
+submodules, so checking it out at the commit below resolves the matching
+dephier/richdem revisions:
 
 | Repo | Commit |
 |---|---|
-| Barnes2020-FillSpillMerge | `1c499ea475c09b9f4c5da74ee5cc995de169db63` |
-| Barnes2019-DepressionHierarchy (dephier) | `411f7d4ad344d74447b47cf9eb85acd536a4d8a1` |
-| richdem | `415032db2f30372111e4cfd37f046e7542ed66f3` |
+| [Barnes2020-FillSpillMerge](https://github.com/r-barnes/Barnes2020-FillSpillMerge) | `1c499ea475c09b9f4c5da74ee5cc995de169db63` |
+| [Barnes2019-DepressionHierarchy](https://github.com/r-barnes/Barnes2019-DepressionHierarchy) (`submodules/dephier`) | `411f7d4ad344d74447b47cf9eb85acd536a4d8a1` |
+| [richdem](https://github.com/r-barnes/richdem) (`…/richdem`) | `415032db2f30372111e4cfd37f046e7542ed66f3` |
+
+Two small patches (in `tools/patches/`) must be applied to that clone
+before the helper tools or `fsm.exe` will build/behave correctly —
+walked through in Testing → Option B (B.2) and justified below. Nothing
+from these repos is redistributed here; only the unified-diff patches we
+authored are committed.
 
 ---
 
 # C++ patches: what they change and why they were necessary
 
-Two small modifications were made to the upstream C++ before it could
-serve as a bit-exact oracle for the Julia port. Both are **pre-applied**
-in `vendor/Barnes2020-FillSpillMerge/` and reproduced as standalone
-diffs in `tools/patches/`. Neither was pushed upstream (the upstream
-repo belongs to a different author). The justification for each follows
-so the modifications can be defended on review.
+Two small modifications to the upstream C++ are required before it can
+serve as a bit-exact oracle for the Julia port. They are committed as
+standalone unified diffs in `tools/patches/` and applied to your own
+upstream clone during Option B setup (B.2); neither was pushed upstream
+(the upstream repo belongs to a different author). The justification for
+each follows so the modifications can be defended on review.
 
 ### Patch 1 — deterministic outlet tie-break in dephier
 
@@ -689,21 +712,26 @@ reference `fsm.exe` to build at all.)
 
 # Licenses
 
-The vendored C++ subtree at `vendor/Barnes2020-FillSpillMerge/`
-preserves each upstream repo's original license at its corresponding
-path:
+**No third-party source is redistributed in this repository.** The
+upstream C++ is not bundled — it is cloned by the user during Option B.
+That deliberately keeps the licensing simple:
 
-- `vendor/Barnes2020-FillSpillMerge/LICENSE` — MIT, Copyright (c) 2020
-  Richard Barnes (FSM).
-- `vendor/Barnes2020-FillSpillMerge/submodules/dephier/LICENSE` — MIT,
-  Copyright (c) 2020 Richard Barnes (dephier).
-- `vendor/Barnes2020-FillSpillMerge/submodules/dephier/submodules/richdem/LICENSE.txt`
-  — **GPL v3** (richdem).
+- The Julia port (`src/`, `test/`) and the helper-tool sources
+  (`tools/*.cpp`, `tools/build.sh`) are this project's own work; their
+  licensing is left to a top-level `LICENSE` file (not yet set on this
+  branch).
+- `tools/patches/*.patch` are short unified diffs *we* authored. One
+  targets dephier (MIT, Copyright (c) 2020 Richard Barnes); the other
+  targets richdem (**GPL v3**). A patch that modifies GPL'd source is
+  itself bound by the GPL when applied — but it is only ever applied to
+  *your own* upstream clone on *your* machine for local oracle
+  regeneration, and nothing is redistributed, so the obligation is
+  satisfied trivially. Distributing small diffs against GPL software is
+  routine and unencumbered.
+- The committed test data (`test/test_cases/**`) is numeric output
+  produced by the algorithms, not upstream source.
 
-richdem being GPL3 means the vendored richdem subdirectory carries GPL3
-obligations (preserve `LICENSE.txt`, offer source on redistribution).
-The Julia code under `src/` does not link against richdem at runtime; it
-only reads files produced by separately-invoked C++ binaries
-(`tools/*.exe`), so the GPL's "mere aggregation" reading applies. The
-Julia port's own licensing is left to a top-level `LICENSE` file (not
-yet set on this branch).
+If you later set a top-level `LICENSE`, note the upstream itself is
+mixed: FSM and dephier are MIT, richdem is GPL v3. That only matters if
+you ever choose to *vendor* or *link* their code; this repo does
+neither.
